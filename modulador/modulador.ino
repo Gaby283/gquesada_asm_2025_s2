@@ -1,186 +1,126 @@
-// modulador_fft.ino
-// ESP32: generador FSK 4-niveles + muestreo ADC + FFT -> muestra frecuencia detectada por Serial
-// Requiere librería arduinoFFT (instalar desde Library Manager)
-
 #include <arduinoFFT.h>
 #include <Arduino.h>
-#include <math.h> 
+#include <math.h>
 
 // ---------- PINES ----------
-const int OUT_PIN = 25; 	// salida modulada (GPIO25)
-const int ADC_PIN 	= 34; 	// entrada ADC para muestreo (GPIO34, ADC1_CH6)
+const int OUT1_PIN = 25;  // señal 1
+const int OUT2_PIN = 26;  // señal 2
+const int ADC_PIN  = 34;  // entrada ADC (si deseas mantener FFT)
 
-// ---------- FRECUENCIAS BASE (Hz) ----------
-// Estas frecuencias son las portadoras FSK
-const int f00 = 100; 	// combinación 00
-const int f01 = 200; 	// combinación 01
-const int f10 = 300; 	// combinación 10
-const int f11 = 400; 	// combinación 11
+// ---------- FRECUENCIAS ----------
+const int f1_low  = 100;   // señal 1: bit = 0
+const int f1_high = 200;   // señal 1: bit = 1
+const int f2_low  = 300;   // señal 2: bit = 0
+const int f2_high = 400;   // señal 2: bit = 1
 
-// ---------- MODULACIÓN ----------
-volatile int bitA = 1; 
-volatile int bitB = 0;
-volatile int f_modulada = 1000; 
+// ---------- Variables de modulación ----------
+volatile int bit1 = 0;
+volatile int bit2 = 0;
+volatile int f_mod1 = 100;
+volatile int f_mod2 = 300;
 
-// ---------- Generador (toggle por software) ----------
-volatile unsigned long halfPeriodUs = 500; 
-volatile bool outputState = false;
+// ---------- Generadores ----------
+volatile unsigned long halfPeriod1 = 500;
+volatile unsigned long halfPeriod2 = 500;
+volatile bool state1 = false;
+volatile bool state2 = false;
 
-// ---------- Parámetros de muestreo y FFT ----------
-const uint16_t SAMPLES = 256; 	 	// potencia de 2
-const double SAMPLING_FREQ = 8192.0; 	// Hz (frecuencia de muestreo)
+// ---------- Control de cambio de bits ----------
+const unsigned long changeIntervalMs = 2000;
+unsigned long lastChangeMs = 0;
+
+// ---------- FFT ----------
+const uint16_t SAMPLES = 256;
+const double SAMPLING_FREQ = 8192.0;
 double vReal[SAMPLES];
 double vImag[SAMPLES];
 ArduinoFFT FFT = ArduinoFFT(vReal, vImag, SAMPLES, SAMPLING_FREQ);
 
-// ---------- Control de tiempos de bits (cambio de combinación) ----------
-const unsigned long changeIntervalMs = 2000; 
-unsigned long lastChangeMs = 0;
-
-// ---------- Protos ----------
-void updateModulatedFrequency();
-void generatorTask(void *pvParameters);
-void samplingTask(void *pvParameters);
-void setHalfPeriodFromFmod(int f);
+// ---------- PROTOTIPOS ----------
+void setHalfPeriod1(int f);
+void setHalfPeriod2(int f);
+void updateFreqs();
+void generatorTask1(void *pv);
+void generatorTask2(void *pv);
 
 void setup() {
-	Serial.begin(115200);
-	delay(200);
-	pinMode(OUT_PIN, OUTPUT);
-	digitalWrite(OUT_PIN, LOW);
-	pinMode(ADC_PIN, INPUT);
+  Serial.begin(115200);
+  pinMode(OUT1_PIN, OUTPUT);
+  pinMode(OUT2_PIN, OUTPUT);
+  digitalWrite(OUT1_PIN, LOW);
+  digitalWrite(OUT2_PIN, LOW);
 
-	updateModulatedFrequency();
+  updateFreqs();
 
-	xTaskCreatePinnedToCore(generatorTask, "GEN_TASK", 2048, NULL, 2, NULL, 1); 	// Core 1
-	xTaskCreatePinnedToCore(samplingTask, "SAMP_TASK", 8192, NULL, 1, NULL, 0); 	// Core 0
+  xTaskCreatePinnedToCore(generatorTask1, "GEN1", 2048, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(generatorTask2, "GEN2", 2048, NULL, 2, NULL, 1);
 
-	Serial.println("modulador_fft: arrancó. Espera información por Serial a 115200.");
-	Serial.println("---------------------------------------------------------------");
-	Serial.println("Modulacion FSK de 4 niveles (4-FSK) activa con simulacion de FFT.");
-	Serial.println("---------------------------------------------------------------");
-}
-
-// --------------------------------------------------------------------------------
-
-void generatorTask(void *pvParameters) {
-	(void) pvParameters;
-	unsigned long lastToggle = micros();
-
-	while (true) {
-		unsigned long now = micros();
-		if ((unsigned long)(now - lastToggle) >= (unsigned long)halfPeriodUs) {
-			outputState = !outputState;
-			digitalWrite(OUT_PIN, outputState ? HIGH : LOW);
-			lastToggle = now;
-		}
-
-		unsigned long nowMs = millis();
-		if (nowMs - lastChangeMs >= changeIntervalMs) {
-			lastChangeMs = nowMs;
-			static int state = 0;
-			state = (state + 1) % 4;
-			switch (state) {
-				case 0: bitA = 0; bitB = 0; break; 
-				case 1: bitA = 0; bitB = 1; break; 
-				case 2: bitA = 1; bitB = 0; break; 
-				case 3: bitA = 1; bitB = 1; break; 
-			}
-			updateModulatedFrequency(); 
-			Serial.print("[GEN] Nueva combinacion: bitA="); Serial.print(bitA);
-			Serial.print(" bitB="); Serial.print(bitB);
-			Serial.print(" -> f_modulada="); Serial.print(f_modulada);
-			Serial.println(" Hz");
-		}
-
-		vTaskDelay(1 / portTICK_PERIOD_MS);
-	}
-}
-
-// --------------------------------------------------------------------------------
-
-//////////////////////////////////////////////////////////
-/// Task: SIMULA la captura de una señal cuadrada, ejecuta FFT y reporta
-//////////////////////////////////////////////////////////
-void samplingTask(void *pvParameters) {
-	(void) pvParameters;
-
-	while (true) {
-		// --- SIMULACIÓN DE ONDA CUADRADA CON FRECUENCIA f_modulada ---
-		
-		double samplesPerHalfPeriod = (SAMPLING_FREQ / (double)f_modulada) / 2.0;
-		
-		const double LOW_LEVEL = 0.0;
-		const double HIGH_LEVEL = 4095.0; 
-
-		unsigned long t0 = micros(); 
-		for (uint16_t i = 0; i < SAMPLES; i++) {
-			
-			if (samplesPerHalfPeriod < 1.0) { 
-				vReal[i] = LOW_LEVEL; 
-			} 
-			else if (fmod((double)i, 2.0 * samplesPerHalfPeriod) < samplesPerHalfPeriod) {
-				vReal[i] = HIGH_LEVEL;
-			} else {
-				vReal[i] = LOW_LEVEL;
-			}
-			vImag[i] = 0.0;
-		}
-		unsigned long t1 = micros();
-
-		// --- Procesar FFT ---
-		FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
-		FFT.compute(FFT_FORWARD);
-		FFT.complexToMagnitude();
-
-		// Obtener pico dominante (Hz)
-		double peak = FFT.majorPeak();
-
-		// También calcular pico manualmente (corregido: usando vReal en lugar de vVal)
-		uint16_t indexMax = 1; 
-		double maxVal = vReal[1];
-		for (uint16_t i = 2; i < SAMPLES/2; i++) {
-			if (vReal[i] > maxVal) { maxVal = vReal[i]; indexMax = i; } // <<-- CORRECCIÓN APLICADA AQUÍ
-		}
-		double freqDetected = (double)indexMax * (SAMPLING_FREQ / (double)SAMPLES);
-
-		// Imprimir resultados
-		Serial.print("[FFT SIM] Detected peak(arduinoFFT) = ");
-		Serial.print(peak, 1);
-		Serial.print(" Hz, peak by bin = ");
-		Serial.print(freqDetected, 1);
-		Serial.print(" Hz, f_modulada(objetivo) = ");
-		Serial.print(f_modulada);
-		Serial.print(" Hz, calcTime(ms) = ");
-		Serial.println((t1 - t0) / 1000.0, 3); 
-
-		vTaskDelay(100 / portTICK_PERIOD_MS);
-	}
-}
-
-// --------------------------------------------------------------------------------
-
-void updateModulatedFrequency() {
-	int baseFreq = 0;
-	if (bitA == 0 && bitB == 0) baseFreq = f00;
-	else if (bitA == 0 && bitB == 1) baseFreq = f01;
-	else if (bitA == 1 && bitB == 0) baseFreq = f10;
-	else if (bitA == 1 && bitB == 1) baseFreq = f11;
-
-	f_modulada = baseFreq * 10;
-
-	if (f_modulada <= 0) f_modulada = 1;
-	setHalfPeriodFromFmod(f_modulada);
-}
-
-void setHalfPeriodFromFmod(int f) {
-	unsigned long half = 500000UL / (unsigned long)f;
-	if (half < 1) half = 1;
-	halfPeriodUs = half;
+  Serial.println("---- MODULADOR 2x2-FSK iniciado ----");
 }
 
 void loop() {
-	vTaskDelay(portMAX_DELAY);
+  unsigned long now = millis();
+  if (now - lastChangeMs >= changeIntervalMs) {
+    lastChangeMs = now;
+    // Cambiar bits de ambas señales
+    bit1 = !bit1;
+    bit2 = !bit2;
+    updateFreqs();
+    Serial.print("[Cambio] bit1="); Serial.print(bit1);
+    Serial.print(" bit2="); Serial.print(bit2);
+    Serial.print(" f1="); Serial.print(f_mod1);
+    Serial.print("Hz f2="); Serial.println(f_mod2);
+  }
+  vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 
+// -------------------------------------------------------
 
+void updateFreqs() {
+  f_mod1 = (bit1 == 0) ? f1_low : f1_high;
+  f_mod2 = (bit2 == 0) ? f2_low : f2_high;
+  setHalfPeriod1(f_mod1);
+  setHalfPeriod2(f_mod2);
+}
+
+void setHalfPeriod1(int f) {
+  unsigned long half = 500000UL / (unsigned long)f;
+  if (half < 1) half = 1;
+  halfPeriod1 = half;
+}
+
+void setHalfPeriod2(int f) {
+  unsigned long half = 500000UL / (unsigned long)f;
+  if (half < 1) half = 1;
+  halfPeriod2 = half;
+}
+
+// -------------------------------------------------------
+
+void generatorTask1(void *pv) {
+  (void) pv;
+  unsigned long lastToggle = micros();
+  while (true) {
+    unsigned long now = micros();
+    if ((now - lastToggle) >= halfPeriod1) {
+      state1 = !state1;
+      digitalWrite(OUT1_PIN, state1 ? HIGH : LOW);
+      lastToggle = now;
+    }
+    vTaskDelay(1 / portTICK_PERIOD_MS);
+  }
+}
+
+void generatorTask2(void *pv) {
+  (void) pv;
+  unsigned long lastToggle = micros();
+  while (true) {
+    unsigned long now = micros();
+    if ((now - lastToggle) >= halfPeriod2) {
+      state2 = !state2;
+      digitalWrite(OUT2_PIN, state2 ? HIGH : LOW);
+      lastToggle = now;
+    }
+    vTaskDelay(1 / portTICK_PERIOD_MS);
+  }
+}
