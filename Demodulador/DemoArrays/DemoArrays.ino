@@ -1,36 +1,13 @@
-/*
- * Demodulador FSK con FFT para ESP32 - ARRAYS PRE-CARGADOS
- * Proyecto: Sistema de Comunicación Local - CE 1110
- * 
- * Descripción:
- * Este código implementa un demodulador FSK que:
- * 1. Usa arrays pre-cargados (sin necesidad de circuito externo)
- * 2. Aplica FFT para análisis espectral
- * 3. Detecta las frecuencias dominantes (f1=800Hz, f2=1600Hz)
- * 4. Muestra resultados por Serial Monitor
- * 
- * INSTRUCCIONES:
- * 1. Ejecuta tu modulacion.py para generar arrays_esp32.txt
- * 2. Copia los 3 arrays generados y pégalos donde dice "PEGAR ARRAYS AQUÍ"
- * 3. Compila y sube al ESP32
- */
-
 #include "arduinoFFT.h"
 
 // ==================== CONFIGURACIÓN ====================
-#define SAMPLES 512              // Muestras para FFT (debe coincidir con Python)
-#define SAMPLING_FREQUENCY 8000  // 8 kHz (debe coincidir con Python)
-
+#define SAMPLES 512              // Muestras para FFT 
+#define SAMPLING_FREQUENCY 8000  // 8 kHz
 // Frecuencias FSK
 #define F1 800   // Frecuencia para bit 0
 #define F2 1600  // Frecuencia para bit 1
 
-// ==================== PEGAR ARRAYS AQUÍ ====================
-// Copia los arrays generados por modulacion.py aquí:
-
-// Ejemplo (REEMPLAZAR con tus arrays):
-// ========== SENAL BIT 0 (800 Hz) ==========
-// ========== SENAL BIT 0 (800 Hz PURO) ==========
+//Arrays
 const int senal_bit0[512] = {
     2048, 3313, 4094, 4094, 3313, 2048,  782,    1,    1,  782, 2047, 3313, 4094, 4094, 3313, 2048,
      782,    1,    1,  782, 2047, 3313, 4094, 4094, 3313, 2047,  782,    1,    1,  782, 2047, 3313,
