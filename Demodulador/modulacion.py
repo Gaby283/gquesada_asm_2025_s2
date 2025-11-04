@@ -150,12 +150,7 @@ def modulacion(archivo="400hz.mp3"):
     return modulada, Fs, bits  # Agregar return
 
 
-def exportar_arrays_esp32(modulada, Fs, bits, muestras=512):
-    """
-    Exporta señales FSK como arrays de C para el ESP32
-    Genera tonos PUROS de 800 Hz y 1600 Hz para pruebas claras
-    """
-    
+def exportar_arrays_esp32(modulada, Fs, bits, muestras=512):    
     # ========== Generar tonos PUROS ==========
     t = np.linspace(0, muestras/Fs, muestras, endpoint=False)
     
@@ -256,7 +251,4 @@ def generar_codigo_c(nombre, datos, valores_por_linea=16):
 
 # Ejemplo de uso:
 if __name__ == "__main__":
-    # IMPORTANTE: Ajusta la ruta según donde esté tu archivo
     modulacion("Sonidos de prueba/400hz.mp3")
-    # O si está en la misma carpeta:
-    # modulacion("400hz.mp3")
