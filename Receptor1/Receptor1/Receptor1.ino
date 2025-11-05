@@ -85,19 +85,21 @@ void loop() {
 
 void capturarDesdeGPIO() {
     unsigned long microseconds;
-    
     for (int i = 0; i < SAMPLES; i++) {
         microseconds = micros();
-        
-        int level = digitalRead(FSK_INPUT_PIN);
-        vReal[i] = (level == 1) ? 1.0 : -1.0;  // Centrar en 0
-        vImag[i] = 0.0;
-        
+
+        int level = digitalRead(FSK_INPUT_PIN);  // 0 ó 1 desde el cable
+
+        // Opción 1: usar 0 y 1 pero centrado:  -0.5 / +0.5
+        vReal[i] = (double)level - 0.5;      // 0 -> -0.5, 1 -> +0.5
+        vImag[i] = 0;
+
         while (micros() - microseconds < samplingPeriod) {
-            // Espera activa
+            // espera activa
         }
     }
 }
+
 
 void aplicarFFT() {
     FFT.windowing(FFTWindow::Hamming, FFTDirection::Forward);

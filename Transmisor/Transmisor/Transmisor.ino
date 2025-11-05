@@ -13,7 +13,7 @@
 #define TX_PIN 25           // Pin de salida digital
 #define F1 800.0f           // Frecuencia bit 0 (Hz)
 #define F2 1600.0f          // Frecuencia bit 1 (Hz)
-#define Tb 0.01f            // Duración por bit (10ms)
+#define Tb 0.130f            // Duración por bit (10ms)
 
 // ==================== VARIABLES GLOBALES ====================
 const float periodo_f1 = 1000000.0 / F1;  // Periodo en microsegundos (1250 μs)
@@ -55,7 +55,7 @@ void loop() {
         char c = Serial.read();
         
         // Ignorar caracteres de control
-        if (c < 32 && c != '\n' && c != '\r') {
+        if (c < 32){ //&& c != '\n' && c != '\r') {
             return;
         }
         
