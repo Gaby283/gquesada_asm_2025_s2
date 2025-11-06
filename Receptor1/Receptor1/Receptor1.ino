@@ -5,28 +5,31 @@
  * Hardware:
  * - Pin GPIO34: Entrada digital FSK (onda cuadrada 0/1)
  * - Pin GPIO26 (DAC2): Salida a parlante/amplificador
+
+*/
+/*
+ * RECEPTOR 1 - SIN delay()
+ * Usa millis() para timing no bloqueante
  */
 
 #include "arduinoFFT.h"
 
 // ==================== CONFIGURACIÓN ====================
-#define SAMPLES 512                  // Muestras para FFT
-#define SAMPLING_FREQUENCY 4000      // 4 kHz (ajustado, era 3500)
-#define FSK_INPUT_PIN 34             // Pin entrada digital
-#define AUDIO_OUTPUT_PIN 26          // Pin DAC salida (parlante)
+#define SAMPLES 512
+#define SAMPLING_FREQUENCY 4000
+#define FSK_INPUT_PIN 34
+#define AUDIO_OUTPUT_PIN 26
 
-// Frecuencias FSK
-#define F1 800   // Bit 0
-#define F2 1600  // Bit 1
+#define F1 800
+#define F2 1600
 
-// Umbrales
 #define UMBRAL_MINIMO 50.0
 #define DIFERENCIA_MINIMA 20.0
 
 // ==================== VARIABLES GLOBALES ====================
 double vReal[SAMPLES];
 double vImag[SAMPLES];
-ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, SAMPLES, SAMPLING_FREQUENCY);
+ArduinoFFT<double> FFT(vReal, vImag, SAMPLES, SAMPLING_FREQUENCY);
 
 unsigned long samplingPeriod;
 unsigned long contadorAnalisis = 0;
@@ -34,56 +37,67 @@ unsigned long contadorAnalisis = 0;
 uint8_t bitsRecibidos[8];
 int bitCount = 0;
 
+// Variables para reproducción de audio sin delay
+bool reproduciendo = false;
+int muestraActual = 0;
+int totalMuestras = 0;
+int frecuenciaAudio = 0;
+unsigned long tiempoAnteriorAudio = 0;
+const int FS_AUDIO = 8000;
+const int PERIODO_AUDIO_US = 1000000 / FS_AUDIO;  // 125 μs
+
 // ==================== SETUP ====================
 void setup() {
     Serial.begin(115200);
-    delay(1000);
-    
-    Serial.println("\n╔════════════════════════════════════════════════╗");
-    Serial.println("║  RECEPTOR 1 - Demodulador FSK (PARLANTE)      ║");
-    Serial.println("║  CE 1110 - Análisis de Señales Mixtas         ║");
-    Serial.println("╚════════════════════════════════════════════════╝\n");
+    delay(1000);  // Solo inicial
     
     pinMode(FSK_INPUT_PIN, INPUT);
     
     samplingPeriod = round(1000000.0 / SAMPLING_FREQUENCY);
     
-    Serial.println("📋 CONFIGURACIÓN:");
-    Serial.print("  • Fs: ");
-    Serial.print(SAMPLING_FREQUENCY);
-    Serial.println(" Hz");
-    Serial.print("  • Muestras FFT: ");
-    Serial.println(SAMPLES);
-    Serial.print("  • Resolución: ");
-    Serial.print((double)SAMPLING_FREQUENCY / SAMPLES, 2);
-    Serial.println(" Hz");
-    Serial.print("  • Pin entrada: GPIO");
-    Serial.println(FSK_INPUT_PIN);
-    Serial.print("  • Pin parlante: GPIO");
-    Serial.println(AUDIO_OUTPUT_PIN);
+    Serial.println("\n╔════════════════════════════════════════════════╗");
+    Serial.println("║  RECEPTOR 1 - SIN delay()                     ║");
+    Serial.println("╚════════════════════════════════════════════════╝\n");
     
-    Serial.println("\n✅ Esperando señal FSK...\n");
-    delay(1000);
+    Serial.println("✅ Esperando señal FSK...\n");
 }
 
 // ==================== LOOP ====================
 void loop() {
+    static int sinSenalCount = 0;
+    // Si está reproduciendo audio, continuar
+    if (reproduciendo) {
+        actualizarAudio();
+        return;  // No capturar mientras reproduce
+    }
+    
+    // Capturar y procesar
     capturarDesdeGPIO();
     aplicarFFT();
     
     int bit = analizarYDemodular();
     mostrarAnalisis(bit);
     
-    if (bit != -1) {
-        acumularBit(bit);
-    }
-    
-    contadorAnalisis++;
+        if (bit == -1) {
+            // No hay tono claro (ni 800 ni 1600)
+            sinSenalCount++;
+            
+            // Si llevamos varias ventanas “vacías”, reseteamos el acumulador de bits
+            if (sinSenalCount >= 3) {   // 3*128ms ≈ 384ms de silencio
+                bitCount = 0;
+            }
+        } else {
+            // Hay bit válido → reseteo contador de silencio y acumulo
+            sinSenalCount = 0;
+            acumularBit(bit);
+        }
+        
+        contadorAnalisis++;
 }
 
 // ==================== FUNCIONES ====================
 
-void capturarDesdeGPIO() {
+ void capturarDesdeGPIO() {
     unsigned long microseconds;
     for (int i = 0; i < SAMPLES; i++) {
         microseconds = micros();
@@ -99,7 +113,6 @@ void capturarDesdeGPIO() {
         }
     }
 }
-
 
 void aplicarFFT() {
     FFT.windowing(FFTWindow::Hamming, FFTDirection::Forward);
@@ -158,13 +171,13 @@ void acumularBit(int bit) {
     if (bitCount >= 8) {
         char c = bitsToChar();
         
-        Serial.print("\n🔊 CARÁCTER RECIBIDO: '");
+        Serial.print("\n🔊 CARÁCTER: '");
         Serial.print(c);
         Serial.print("' (ASCII ");
         Serial.print((int)c);
         Serial.println(")\n");
         
-        reproducirCaracter(c);
+        iniciarReproduccion(c);
         
         bitCount = 0;
     }
@@ -178,27 +191,29 @@ char bitsToChar() {
     return (char)ascii;
 }
 
-void reproducirCaracter(char c) {
-    // Tono según carácter (200-2500 Hz)
-    int frecuencia = 200 + ((int)c * 10);
-    int duracion = 300;  // 300 ms
-    
-    reproducirTono(frecuencia, duracion);
+void iniciarReproduccion(char c) {
+    frecuenciaAudio = 200 + ((int)c * 10);
+    totalMuestras = (300 * FS_AUDIO) / 1000;  // 300ms
+    muestraActual = 0;
+    reproduciendo = true;
+    tiempoAnteriorAudio = micros();
 }
 
-// ⭐ FUNCIÓN CORREGIDA - Usa Fs diferente para reproducción
-void reproducirTono(int freq, int duracion_ms) {
-    const int FS_AUDIO = 8000;  // Fs para audio del parlante (independiente)
-    int muestras = (duracion_ms * FS_AUDIO) / 1000;
-    int periodo_us = 1000000 / FS_AUDIO;  // 125 μs @ 8kHz
+void actualizarAudio() {
+    unsigned long tiempoActual = micros();
     
-    for (int i = 0; i < muestras; i++) {
-        float t = i / (float)FS_AUDIO;
-        int valor = 128 + 100 * sin(2 * PI * freq * t);
-        dacWrite(AUDIO_OUTPUT_PIN, constrain(valor, 0, 255));
-        delayMicroseconds(periodo_us);
+    if (tiempoActual - tiempoAnteriorAudio >= PERIODO_AUDIO_US) {
+        tiempoAnteriorAudio = tiempoActual;
+        
+        if (muestraActual < totalMuestras) {
+            float t = muestraActual / (float)FS_AUDIO;
+            int valor = 128 + 100 * sin(2 * PI * frecuenciaAudio * t);
+            dacWrite(AUDIO_OUTPUT_PIN, constrain(valor, 0, 255));
+            muestraActual++;
+        } else {
+            // Terminar reproducción
+            dacWrite(AUDIO_OUTPUT_PIN, 128);
+            reproduciendo = false;
+        }
     }
-    
-    // Silencio
-    dacWrite(AUDIO_OUTPUT_PIN, 128);
 }
