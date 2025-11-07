@@ -18,7 +18,7 @@
 #define SAMPLES 512
 #define SAMPLING_FREQUENCY 4000
 #define FSK_INPUT_PIN 34
-#define AUDIO_OUTPUT_PIN 26
+//#define AUDIO_OUTPUT_PIN 26
 
 #define F1 800
 #define F2 1600
@@ -38,13 +38,13 @@ uint8_t bitsRecibidos[8];
 int bitCount = 0;
 
 // Variables para reproducción de audio sin delay
-bool reproduciendo = false;
-int muestraActual = 0;
-int totalMuestras = 0;
-int frecuenciaAudio = 0;
-unsigned long tiempoAnteriorAudio = 0;
-const int FS_AUDIO = 8000;
-const int PERIODO_AUDIO_US = 1000000 / FS_AUDIO;  // 125 μs
+//bool reproduciendo = false;
+//int muestraActual = 0;
+//int totalMuestras = 0;
+//int frecuenciaAudio = 0;
+//unsigned long tiempoAnteriorAudio = 0;
+//const int FS_AUDIO = 8000;
+//const int PERIODO_AUDIO_US = 1000000 / FS_AUDIO;  // 125 μs
 
 // ==================== SETUP ====================
 void setup() {
@@ -66,10 +66,10 @@ void setup() {
 void loop() {
     static int sinSenalCount = 0;
     // Si está reproduciendo audio, continuar
-    if (reproduciendo) {
+    /*if (reproduciendo) {
         actualizarAudio();
         //return;  // **No capturar mientras reproduce      ***PARA ARREGLAR, PRUEBAS SIN EL RETURN
-    }
+    }*/
     
     // Capturar y procesar
     capturarDesdeGPIO();
@@ -177,7 +177,7 @@ void acumularBit(int bit) {
         Serial.print((int)c);
         Serial.println(")\n");
         
-        iniciarReproduccion(c);
+        //iniciarReproduccion(c);
         
         bitCount = 0;
     }
@@ -191,7 +191,7 @@ char bitsToChar() {
     return (char)ascii;
 }
 
-void iniciarReproduccion(char c) {
+/*void iniciarReproduccion(char c) {
     frecuenciaAudio = 200 + ((int)c * 10);
     totalMuestras = (300 * FS_AUDIO) / 1000;  // 300ms
     muestraActual = 0;
@@ -216,4 +216,4 @@ void actualizarAudio() {
             reproduciendo = false;
         }
     }
-}
+}*/
