@@ -5,14 +5,15 @@
 
 #include <Arduino.h>
 
-// ==================== CONFIGURACIÓN ====================
 #define TX_PIN 25
 #define F1 800.0f
 #define F2 1600.0f
-#define Tb 0.140f  // 10ms por bit
+#define Tb 0.140f          // 140 ms por bit
+#define T_GUARDA 0.30f     // 300 ms de silencio entre caracteres
 
 // ==================== VARIABLES GLOBALES ====================
-enum Estado { IDLE, TRANSMITIENDO };
+enum Estado { IDLE, TRANSMITIENDO, GUARDA };
+
 Estado estadoActual = IDLE;
 
 char caracterActual = 0;
@@ -23,6 +24,8 @@ bool estadoPin = LOW;
 
 unsigned long tiempoAnterior = 0;
 float periodoActual_us = 0;
+
+unsigned long inicioGuarda_ms = 0;   // NUEVO: para el estado GUARDA
 
 // ==================== SETUP ====================
 void setup() {
@@ -41,20 +44,18 @@ void setup() {
     Serial.println("📝 Escribe texto para transmitir:\n");
 }
 
-// ==================== LOOP ====================
 void loop() {
-    // Máquina de estados
     switch (estadoActual) {
         case IDLE:
             if (Serial.available()) {
                 caracterActual = Serial.read();
                 
-                if (caracterActual >= 32){ //|| caracterActual == '\n' || caracterActual == '\r') {
+                if (caracterActual >= 32) {
                     Serial.print("TX: '");
                     Serial.print(caracterActual);
                     Serial.print("' → ");
                     
-                    bitIndex = 7;  // Empezar desde MSB
+                    bitIndex = 7;
                     estadoActual = TRANSMITIENDO;
                     iniciarTransmisionBit();
                 }
@@ -64,6 +65,15 @@ void loop() {
         case TRANSMITIENDO:
             actualizarTransmision();
             break;
+
+        case GUARDA: {
+            // Mantener la línea en LOW un tiempo fijo
+            unsigned long ahora = millis();
+            if (ahora - inicioGuarda_ms >= (unsigned long)(T_GUARDA * 1000)) {
+                estadoActual = IDLE;
+            }
+            break;
+        }
     }
 }
 
@@ -111,12 +121,16 @@ void actualizarTransmision() {
                 if (bitIndex < 0) {
                     // Carácter completo
                     Serial.println(" ✓");
-                    estadoActual = IDLE;
                     digitalWrite(TX_PIN, LOW);
+
+                    // Entrar a estado de guarda (silencio controlado)
+                    inicioGuarda_ms = millis();
+                    estadoActual = GUARDA;
                 } else {
                     // Siguiente bit
                     iniciarTransmisionBit();
                 }
+
             }
         }
     }

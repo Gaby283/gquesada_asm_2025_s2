@@ -68,7 +68,7 @@ void loop() {
     // Si está reproduciendo audio, continuar
     if (reproduciendo) {
         actualizarAudio();
-        return;  // No capturar mientras reproduce
+        //return;  // **No capturar mientras reproduce      ***PARA ARREGLAR, PRUEBAS SIN EL RETURN
     }
     
     // Capturar y procesar
