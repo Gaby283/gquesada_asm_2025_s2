@@ -1,6 +1,15 @@
 /*
- * RECEPTOR 1 - CORREGIDO
- * Captura bit por bit, sincronizado con Tb
+ * RECEPTOR 1 - Demodulador FSK con PARLANTE
+ * Proyecto: Sistema de Comunicación Local - CE 1110
+ * 
+ * Hardware:
+ * - Pin GPIO34: Entrada digital FSK (onda cuadrada 0/1)
+ * - Pin GPIO26 (DAC2): Salida a parlante/amplificador
+
+*/
+/*
+ * RECEPTOR 1 - SIN delay()
+ * Usa millis() para timing no bloqueante
  */
 
 #include "arduinoFFT.h"
@@ -13,7 +22,6 @@
 
 #define F1 800
 #define F2 1600
-#define Tb 0.013f  // ← DEBE COINCIDIR CON TRANSMISOR
 
 #define UMBRAL_MINIMO 50.0
 #define DIFERENCIA_MINIMA 20.0
@@ -29,117 +37,77 @@ unsigned long contadorAnalisis = 0;
 uint8_t bitsRecibidos[8];
 int bitCount = 0;
 
-// Para reproducción
+// Variables para reproducción de audio sin delay
 bool reproduciendo = false;
 int muestraActual = 0;
 int totalMuestras = 0;
 int frecuenciaAudio = 0;
 unsigned long tiempoAnteriorAudio = 0;
 const int FS_AUDIO = 8000;
-const int PERIODO_AUDIO_US = 1000000 / FS_AUDIO;
-
-// ⭐ NUEVO: Variables para sincronización
-unsigned long tiempoUltimoBit = 0;
-const unsigned long PERIODO_BIT_MS = (unsigned long)(Tb * 1000);  // 10ms
+const int PERIODO_AUDIO_US = 1000000 / FS_AUDIO;  // 125 μs
 
 // ==================== SETUP ====================
 void setup() {
     Serial.begin(115200);
-    delay(1000);
+    delay(1000);  // Solo inicial
     
     pinMode(FSK_INPUT_PIN, INPUT);
     
     samplingPeriod = round(1000000.0 / SAMPLING_FREQUENCY);
     
     Serial.println("\n╔════════════════════════════════════════════════╗");
-    Serial.println("║  RECEPTOR 1 - CORREGIDO (sincronizado)        ║");
+    Serial.println("║  RECEPTOR 1 - SIN delay()                     ║");
     Serial.println("╚════════════════════════════════════════════════╝\n");
     
-    Serial.print("Configuración:\n");
-    Serial.print("  • Tb: ");
-    Serial.print(Tb * 1000, 1);
-    Serial.println(" ms");
-    Serial.print("  • Ventana captura: ");
-    Serial.print((float)SAMPLES / SAMPLING_FREQUENCY * 1000, 1);
-    Serial.println(" ms");
-    
-    Serial.println("\n✅ Esperando señal FSK...\n");
-    
-    tiempoUltimoBit = millis();
+    Serial.println("✅ Esperando señal FSK...\n");
 }
 
 // ==================== LOOP ====================
 void loop() {
+    static int sinSenalCount = 0;
     // Si está reproduciendo audio, continuar
     if (reproduciendo) {
         actualizarAudio();
-        return;
+        return;  // No capturar mientras reproduce
     }
     
-    // ⭐ CAMBIO: Solo capturar cada Tb milisegundos
-    unsigned long tiempoActual = millis();
-    if (tiempoActual - tiempoUltimoBit >= PERIODO_BIT_MS) {
-        tiempoUltimoBit = tiempoActual;
-        
-        // Capturar ventana pequeña (solo un bit)
-        capturarVentanaBit();
-        aplicarFFT();
-        
-        int bit = analizarYDemodular();
-        mostrarAnalisis(bit);
-        
-        if (bit != -1) {
-            acumularBit(bit);
-        } else {
-            // Sin señal válida, resetear si pasa mucho tiempo
-            if (bitCount > 0) {
-                Serial.println("⚠️  Señal perdida, reseteando buffer");
+    // Capturar y procesar
+    capturarDesdeGPIO();
+    aplicarFFT();
+    
+    int bit = analizarYDemodular();
+    mostrarAnalisis(bit);
+    
+        if (bit == -1) {
+            // No hay tono claro (ni 800 ni 1600)
+            sinSenalCount++;
+            
+            // Si llevamos varias ventanas “vacías”, reseteamos el acumulador de bits
+            if (sinSenalCount >= 3) {   // 3*128ms ≈ 384ms de silencio
                 bitCount = 0;
             }
+        } else {
+            // Hay bit válido → reseteo contador de silencio y acumulo
+            sinSenalCount = 0;
+            acumularBit(bit);
         }
         
         contadorAnalisis++;
-    }
 }
 
 // ==================== FUNCIONES ====================
 
-// ⭐ NUEVA FUNCIÓN: Captura solo una ventana del tamaño de un bit
-void capturarVentanaBit() {
-    // Calcular cuántas muestras necesitamos para Tb segundos
-    int muestrasParaTb = (int)(Tb * SAMPLING_FREQUENCY);  // 40 muestras @ Tb=0.01, Fs=4000
-    
-    // Capturar solo esas muestras
-    unsigned long microseconds;
-    for (int i = 0; i < muestrasParaTb && i < SAMPLES; i++) {
-        microseconds = micros();
-        
-        int level = digitalRead(FSK_INPUT_PIN);
-        vReal[i] = (double)level - 0.5;
-        vImag[i] = 0;
-        
-        while (micros() - microseconds < samplingPeriod) {
-            // espera activa
-        }
-    }
-    
-    // Rellenar el resto con ceros (zero-padding para FFT)
-    for (int i = muestrasParaTb; i < SAMPLES; i++) {
-        vReal[i] = 0;
-        vImag[i] = 0;
-    }
-}
-
-void capturarDesdeGPIO() {
-    // MANTENER PARA COMPATIBILIDAD
+ void capturarDesdeGPIO() {
     unsigned long microseconds;
     for (int i = 0; i < SAMPLES; i++) {
         microseconds = micros();
-        
-        int level = digitalRead(FSK_INPUT_PIN);
-        vReal[i] = (double)level - 0.5;
+
+        int level = digitalRead(FSK_INPUT_PIN);  // 0 ó 1 desde el cable
+
+        // Opción 1: usar 0 y 1 pero centrado:  -0.5 / +0.5
+        vReal[i] = (double)level - 0.5;      // 0 -> -0.5, 1 -> +0.5
         vImag[i] = 0;
-        
+
         while (micros() - microseconds < samplingPeriod) {
             // espera activa
         }
@@ -155,11 +123,6 @@ void aplicarFFT() {
 int analizarYDemodular() {
     int index_f1 = round(F1 * SAMPLES / SAMPLING_FREQUENCY);
     int index_f2 = round(F2 * SAMPLES / SAMPLING_FREQUENCY);
-    
-    // Verificar que índices estén en rango
-    if (index_f1 < 1 || index_f2 < 1 || index_f1 >= SAMPLES-1 || index_f2 >= SAMPLES-1) {
-        return -1;
-    }
     
     double mag_f1 = (vReal[index_f1-1] + vReal[index_f1] + vReal[index_f1+1]) / 3.0;
     double mag_f2 = (vReal[index_f2-1] + vReal[index_f2] + vReal[index_f2+1]) / 3.0;
@@ -178,27 +141,22 @@ void mostrarAnalisis(int bit) {
     int index_f1 = round(F1 * SAMPLES / SAMPLING_FREQUENCY);
     int index_f2 = round(F2 * SAMPLES / SAMPLING_FREQUENCY);
     
-    if (index_f1 < 1 || index_f2 < 1 || index_f1 >= SAMPLES-1 || index_f2 >= SAMPLES-1) {
-        Serial.println("❌ Error: índices fuera de rango");
-        return;
-    }
-    
     double mag_f1 = (vReal[index_f1-1] + vReal[index_f1] + vReal[index_f1+1]) / 3.0;
     double mag_f2 = (vReal[index_f2-1] + vReal[index_f2] + vReal[index_f2+1]) / 3.0;
     
-    Serial.print("Bit #");
+    Serial.print("Análisis #");
     Serial.print(contadorAnalisis);
-    Serial.print(" | 800Hz: ");
+    Serial.print(" | Mag@800: ");
     Serial.print(mag_f1, 0);
-    Serial.print(" | 1600Hz: ");
+    Serial.print(" | Mag@1600: ");
     Serial.print(mag_f2, 0);
-    Serial.print(" → ");
+    Serial.print(" | Bit: ");
     
     if (bit == -1) {
         Serial.println("❌");
     } else {
         Serial.print(bit);
-        Serial.print(" [");
+        Serial.print(" | Bits: [");
         for (int i = 0; i < bitCount; i++) {
             Serial.print(bitsRecibidos[i]);
         }
@@ -213,15 +171,11 @@ void acumularBit(int bit) {
     if (bitCount >= 8) {
         char c = bitsToChar();
         
-        Serial.print("\n🔊 CARÁCTER COMPLETO: '");
+        Serial.print("\n🔊 CARÁCTER: '");
         Serial.print(c);
         Serial.print("' (ASCII ");
         Serial.print((int)c);
-        Serial.print(") Binario: ");
-        for (int i = 0; i < 8; i++) {
-            Serial.print(bitsRecibidos[i]);
-        }
-        Serial.println("\n");
+        Serial.println(")\n");
         
         iniciarReproduccion(c);
         
@@ -239,7 +193,7 @@ char bitsToChar() {
 
 void iniciarReproduccion(char c) {
     frecuenciaAudio = 200 + ((int)c * 10);
-    totalMuestras = (300 * FS_AUDIO) / 1000;
+    totalMuestras = (300 * FS_AUDIO) / 1000;  // 300ms
     muestraActual = 0;
     reproduciendo = true;
     tiempoAnteriorAudio = micros();
@@ -257,6 +211,7 @@ void actualizarAudio() {
             dacWrite(AUDIO_OUTPUT_PIN, constrain(valor, 0, 255));
             muestraActual++;
         } else {
+            // Terminar reproducción
             dacWrite(AUDIO_OUTPUT_PIN, 128);
             reproduciendo = false;
         }
