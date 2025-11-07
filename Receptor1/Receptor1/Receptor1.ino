@@ -23,7 +23,7 @@
 #define F1 800
 #define F2 1600
 
-#define UMBRAL_MINIMO 50.0
+#define UMBRAL_MINIMO 30.0
 #define DIFERENCIA_MINIMA 20.0
 
 // ==================== VARIABLES GLOBALES ====================
@@ -83,7 +83,7 @@ void loop() {
             sinSenalCount++;
             
             // Si llevamos varias ventanas “vacías”, reseteamos el acumulador de bits
-            if (sinSenalCount >= 3) {   // 3*128ms ≈ 384ms de silencio
+            if (sinSenalCount >= 2) {   // 3*128ms ≈ 384ms de silencio
                 bitCount = 0;
             }
         } else {
