@@ -23,8 +23,8 @@
 #define F1 800
 #define F2 1600
 
-#define UMBRAL_MINIMO 30.0
-#define DIFERENCIA_MINIMA 20.0
+#define UMBRAL_MINIMO 20.0    //50 NO, 40 NO, MUY ESTRICTO, 30 SI, 25 MEGA BIEN, 20 FUNCIONA PARA PROYECTO
+#define DIFERENCIA_MINIMA 15.0    //20 FUNCIONA, 15 MEJOR CASO
 
 // ==================== VARIABLES GLOBALES ====================
 double vReal[SAMPLES];
