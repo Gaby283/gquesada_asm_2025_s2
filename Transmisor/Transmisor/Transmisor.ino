@@ -1,186 +1,173 @@
 /*
- * TRANSMISOR FSK DIGITAL - SIN delay()
- * Un solo GPIO envía:
- *  - Texto (FSK 800/1600) para Receptor1
- *  - Comandos de audio (FSK 400/1200) para Receptor2
+ * TRANSMISOR FSK TDM (un solo GPIO)
+ * - Slot BAJO (360/540): piloto 0101 o paquete de AUDIO ('0'/'1')
+ * - Slot ALTO (1400/1700): paquete de TEXTO (preambulo 0x55 + 1 char)
+ *
+ * TDM: [LOW slot] -> GUARD -> [HIGH slot] -> GUARD -> repeat
+ * Forma de onda: cuadrada (simple), con tiempos por micros() (no delay()).
  */
 
 #include <Arduino.h>
 
 #define TX_PIN 25
 
-// Portadoras para TEXTO (Receptor1)
-#define F_TX0 800.0f     // bit 0
-#define F_TX1 1600.0f    // bit 1
+// -------- Frecuencias (Hz) --------
+// Canal BAJO (piloto/audio)
+static const float F_LOW0 = 360.0f;   // bit 0
+static const float F_LOW1 = 540.0f;   // bit 1
+// Canal ALTO (texto)
+static const float F_HIGH0 = 1400.0f; // bit 0
+static const float F_HIGH1 = 1700.0f; // bit 1
 
-// Portadoras para AUDIO (Receptor2)
-#define F_AUDIO_LOW  400.0f   // comando '0'
-#define F_AUDIO_HIGH 1200.0f  // comando '1'
+// -------- Tiempos --------
+// Duración EXACTA de la ventana FFT del RX: 512 / 4000 Hz = 128 ms
+static const float TB_ms         = 128.0f; // no 120 ni 140
+static const float GUARD_ms      = 90.0f;  // un poco más de 1/2 frame
+static const float AUDIO_BURST_ms= 512.0f; // múltiplo del frame (4 frames)
 
-// Tiempos
-#define Tb       0.140f   // 140 ms por bit (texto)
-#define T_GUARDA 0.30f    // 300 ms de silencio entre caracteres
-#define T_AUDIO  0.50f    // 500 ms de ráfaga para cada comando de audio
 
-// ==================== VARIABLES GLOBALES ====================
-enum Estado { IDLE, TRANSMITIENDO_TEXTO, TRANSMITIENDO_AUDIO, GUARDA };
-Estado estadoActual = IDLE;
+// Preambulo para TEXTO (mejora sincronía en RX)
+static const uint8_t PREAMBULO   = 0x55;   // 01010101
+static const uint8_t PREAMB_REPS = 2;
 
-char caracterActual = 0;
-int bitIndex = 0;
-int cicloActual = 0;
-int numCiclosTotal = 0;
-bool estadoPin = LOW;
+// -------- Colas simples --------
+#define QSZ 64
+char qText[QSZ];   int qhT=0, qtT=0, qcT=0;   // cola para texto
+char qAudio[QSZ];  int qhA=0, qtA=0, qcA=0;   // cola para audio ('0'/'1')
 
-unsigned long tiempoAnterior = 0;
-float periodoActual_us = 0;
+// ===== Utilidad de colas =====
+bool qPush(char *q,int &qh,int &qt,int &qc,char v){ if(qc>=QSZ) return false; q[qt]=v; qt=(qt+1)%QSZ; qc++; return true; }
+bool qPop (char *q,int &qh,int &qt,int &qc,char &v){ if(qc<=0)  return false; v=q[qh]; qh=(qh+1)%QSZ; qc--; return true; }
 
-unsigned long inicioGuarda_ms = 0;
-unsigned long inicioAudio_ms = 0;
+// ===== Generación de cuadrada =====
+inline void startLineHigh(){ digitalWrite(TX_PIN, HIGH); }
+inline void setLine(bool s){ digitalWrite(TX_PIN, s?HIGH:LOW); }
+inline void stopLine(){ digitalWrite(TX_PIN, LOW); }
 
-// ==================== SETUP ====================
-void setup() {
-    Serial.begin(115200);
-    delay(1000);
-    
-    pinMode(TX_PIN, OUTPUT);
-    digitalWrite(TX_PIN, LOW);
-    
-    Serial.println("\n╔════════════════════════════════════════╗");
-    Serial.println("║  TRANSMISOR FSK - SIN delay()         ║");
-    Serial.println("║  CE 1110 - Proyecto Comunicación      ║");
-    Serial.println("╚════════════════════════════════════════╝\n");
-    
-    Serial.println("✅ Sistema listo");
-    Serial.println("   • Letras normales → TEXTO (800/1600)");
-    Serial.println("   • '0' → AUDIO grave (400 Hz)");
-    Serial.println("   • '1' → AUDIO agudo (1200 Hz)\n");
-}
+// cuadrada por duración (ms) a fHz
+void sendToneBurst(float fHz, float dur_ms){
+  if(fHz <= 0.0f || dur_ms <= 0.0f) return;
+  const float T_us = 1000000.0f / fHz;     // periodo
+  const float half_us = T_us / 2.0f;       // semiperiodo
+  const unsigned long total_us = (unsigned long)(dur_ms * 1000.0f);
 
-// ==================== LOOP ====================
-void loop() {
-    switch (estadoActual) {
-        case IDLE:
-            if (Serial.available()) {
-                caracterActual = Serial.read();
-
-                // Comandos de AUDIO: '0' y '1'
-                if (caracterActual == '0' || caracterActual == '1') {
-                    iniciarTransmisionAudio(caracterActual);
-                
-                // TEXTO ASCII normal (espacio en adelante)
-                } else if (caracterActual >= 32) {
-                    Serial.print("TX TEXTO: '");
-                    Serial.print(caracterActual);
-                    Serial.print("' → ");
-
-                    bitIndex = 7;  // MSB primero
-                    estadoActual = TRANSMITIENDO_TEXTO;
-                    iniciarTransmisionBitTexto();
-                }
-            }
-            break;
-            
-        case TRANSMITIENDO_TEXTO:
-            actualizarTransmisionTexto();
-            break;
-
-        case TRANSMITIENDO_AUDIO:
-            actualizarTransmisionAudio();
-            break;
-
-        case GUARDA: {
-            unsigned long ahora = millis();
-            if (ahora - inicioGuarda_ms >= (unsigned long)(T_GUARDA * 1000)) {
-                estadoActual = IDLE;
-            }
-            break;
-        }
+  unsigned long t0 = micros();
+  bool state = true; setLine(state);
+  unsigned long last = micros();
+  while(micros() - t0 < total_us){
+    unsigned long now = micros();
+    if(now - last >= (unsigned long)half_us){
+      state = !state; setLine(state);
+      last = now;
     }
+  }
+  stopLine();
 }
 
-// ==================== FUNCIONES TEXTO ====================
+// bit FSK con par (f0,f1) y TB_ms (bloqueante)
+void sendFSKBit(bool bit, float f0, float f1, float Tb_ms){
+  const float f = bit ? f1 : f0;
+  const float T_us = 1000000.0f / f;
+  const float half_us = T_us / 2.0f;
+  const unsigned long total_us = (unsigned long)(Tb_ms * 1000.0f);
 
-void iniciarTransmisionBitTexto() {
-    int bit = (((int)caracterActual) >> bitIndex) & 1;
+  unsigned long t0 = micros();
+  bool state = true; setLine(state);
+  unsigned long last = micros();
+  while(micros() - t0 < total_us){
+    unsigned long now = micros();
+    if(now - last >= (unsigned long)half_us){
+      state = !state; setLine(state);
+      last = now;
+    }
+  }
+  stopLine();
+}
+
+// silencio (guard time)
+void guardSilence(float ms){
+  stopLine();
+  unsigned long t0 = micros();
+  const unsigned long total_us = (unsigned long)(ms * 1000.0f);
+  while(micros() - t0 < total_us){ /* busy wait */ }
+}
+
+// ===== Paquetes (slots) =====
+
+// SLOT BAJO: si hay audio en cola, envía ráfaga a LOW/HIGH;
+// si no, envía piloto 0101 (4 bits) en (F_LOW0,F_LOW1)
+void slotLOW(){
+  char cmd;
+  if(qPop(qAudio, qhA, qtA, qcA, cmd)){
+    // '0' usa F_LOW0, '1' usa F_LOW1, como ráfaga continua
+    float f = (cmd=='1') ? F_LOW1 : F_LOW0;
+    Serial.print("[LOW] AUDIO cmd="); Serial.print(cmd);
+    Serial.print(" f="); Serial.print(f); Serial.println(" Hz");
+    sendToneBurst(f, AUDIO_BURST_ms);       // ráfaga
+  }else{
+    // Piloto 0101
+    Serial.println("[LOW] PILOTO 0101");
+    const bool patt[4] = {0,1,0,1};
+    for(int i=0;i<4;i++) sendFSKBit(patt[i], F_LOW0, F_LOW1, TB_ms);
+  }
+}
+
+// SLOT ALTO: si hay texto en cola, envía preámbulo + 1 carácter (MSB-first)
+void slotHIGH(){
+  char c;
+  if(!qPop(qText, qhT, qtT, qcT, c)){
+    Serial.println("[HIGH] (sin texto)");
+    return;
+  }
+
+  Serial.print("[HIGH] TEXTO: '"); Serial.print(c); Serial.print("' bits: ");
+
+  // preámbulo 0x55 repetido
+  for(uint8_t r=0;r<PREAMB_REPS;r++){
+    for(int b=7;b>=0;b--){
+      bool bit = ( (PREAMBULO >> b) & 1 );
+      sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);
+    }
+  }
+
+  // carácter (MSB primero)
+  for(int b=7;b>=0;b--){
+    bool bit = ( ((uint8_t)c >> b) & 1 );
     Serial.print(bit);
-    
-    float frecuencia = (bit == 0) ? F_TX0 : F_TX1;
-    periodoActual_us = 1000000.0 / frecuencia;
-    
-    numCiclosTotal = (int)(frecuencia * Tb);
-    cicloActual = 0;
-    
-    estadoPin = HIGH;
-    digitalWrite(TX_PIN, estadoPin);
-    tiempoAnterior = micros();
+    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);
+  }
+  Serial.println(" ✓");
 }
 
-void actualizarTransmisionTexto() {
-    unsigned long tiempoActual = micros();
-    
-    if (tiempoActual - tiempoAnterior >= (periodoActual_us / 2)) {
-        tiempoAnterior = tiempoActual;
-        
-        estadoPin = !estadoPin;
-        digitalWrite(TX_PIN, estadoPin);
-        
-        if (estadoPin == LOW) {
-            cicloActual++;
-            
-            if (cicloActual >= numCiclosTotal) {
-                bitIndex--;
-                
-                if (bitIndex < 0) {
-                    Serial.println(" ✓");
-                    digitalWrite(TX_PIN, LOW);
+// ===== SETUP/LOOP =====
+void setup(){
+  Serial.begin(115200);
+  delay(400);
+  pinMode(TX_PIN, OUTPUT);
+  stopLine();
 
-                    inicioGuarda_ms = millis();
-                    estadoActual = GUARDA;
-                } else {
-                    iniciarTransmisionBitTexto();
-                }
-            }
-        }
-    }
+  Serial.println("\n=== TX FSK TDM ===");
+  Serial.println("LOW slot:  PILOTO(0101) o AUDIO ('0'/'1') @ 360/540 Hz");
+  Serial.println("HIGH slot: TEXTO (preamb+char)           @ 1400/1700 Hz");
+  Serial.println("TDM: [LOW] -> GUARD -> [HIGH] -> GUARD\n");
 }
 
-// ==================== FUNCIONES AUDIO ====================
-
-void iniciarTransmisionAudio(char comando) {
-    // Elegir frecuencia portadora según el comando
-    float frecuencia = (comando == '0') ? F_AUDIO_LOW : F_AUDIO_HIGH;
-
-    Serial.print("TX AUDIO comando ");
-    Serial.print(comando);
-    Serial.print(" → ");
-    Serial.print(frecuencia);
-    Serial.println(" Hz");
-
-    periodoActual_us = 1000000.0 / frecuencia;
-
-    estadoPin = HIGH;
-    digitalWrite(TX_PIN, estadoPin);
-    tiempoAnterior = micros();
-
-    inicioAudio_ms = millis();
-    estadoActual = TRANSMITIENDO_AUDIO;
-}
-
-void actualizarTransmisionAudio() {
-    unsigned long tiempoActual = micros();
-    
-    // Generar onda cuadrada a F_AUDIO_x
-    if (tiempoActual - tiempoAnterior >= (periodoActual_us / 2)) {
-        tiempoAnterior = tiempoActual;
-        estadoPin = !estadoPin;
-        digitalWrite(TX_PIN, estadoPin);
+void loop(){
+  // Leer entrada y encolar
+  while(Serial.available()){
+    char ch = (char)Serial.read();
+    if(ch=='0' || ch=='1'){
+      qPush(qAudio, qhA, qtA, qcA, ch);
+    }else if((uint8_t)ch >= 32){
+      qPush(qText, qhT, qtT, qcT, ch);
     }
+  }
 
-    // Terminar ráfaga de audio después de T_AUDIO
-    if (millis() - inicioAudio_ms >= (unsigned long)(T_AUDIO * 1000)) {
-        digitalWrite(TX_PIN, LOW);
-        inicioGuarda_ms = millis();
-        estadoActual = GUARDA;
-    }
+  // ---- SLOT BAJO ----
+  slotLOW();
+  guardSilence(GUARD_ms);
+
+  // ---- SLOT ALTO ----
+  slotHIGH();
+  guardSilence(GUARD_ms);
 }
