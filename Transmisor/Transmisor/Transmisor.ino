@@ -21,7 +21,7 @@ static const float F_HIGH1 = 1600.0f; // bit 1
 
 // -------- Tiempos --------
 static const float TB_ms         = 140.0f; // duración de cada bit FSK  140.0f
-static const float GUARD_ms      = 80.0f;  // silencio entre slots 120
+static const float GUARD_ms      = 300.0f;  // silencio entre slots 120
 static const float AUDIO_BURST_ms= 500.0f; // ráfaga de audio si hay comando
 
 // Preambulo para TEXTO (mejora sincronía en RX)
