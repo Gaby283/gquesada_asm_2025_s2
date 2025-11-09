@@ -16,19 +16,17 @@
 static const float F_LOW0 = 360.0f;   // bit 0
 static const float F_LOW1 = 540.0f;   // bit 1
 // Canal ALTO (texto)
-static const float F_HIGH0 = 1400.0f; // bit 0
-static const float F_HIGH1 = 1700.0f; // bit 1
+static const float F_HIGH0 = 800.0f; // bit 0
+static const float F_HIGH1 = 1600.0f; // bit 1
 
 // -------- Tiempos --------
-// Duración EXACTA de la ventana FFT del RX: 512 / 4000 Hz = 128 ms
-static const float TB_ms         = 128.0f; // no 120 ni 140
-static const float GUARD_ms      = 90.0f;  // un poco más de 1/2 frame
-static const float AUDIO_BURST_ms= 512.0f; // múltiplo del frame (4 frames)
-
+static const float TB_ms         = 140.0f; // duración de cada bit FSK  140.0f
+static const float GUARD_ms      = 80.0f;  // silencio entre slots 120
+static const float AUDIO_BURST_ms= 500.0f; // ráfaga de audio si hay comando
 
 // Preambulo para TEXTO (mejora sincronía en RX)
 static const uint8_t PREAMBULO   = 0x55;   // 01010101
-static const uint8_t PREAMB_REPS = 2;
+static const uint8_t PREAMB_REPS = 1;
 
 // -------- Colas simples --------
 #define QSZ 64
