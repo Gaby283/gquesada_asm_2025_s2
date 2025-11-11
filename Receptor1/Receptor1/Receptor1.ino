@@ -1,30 +1,22 @@
 /*
- * RECEPTOR 1 - Demodulador FSK con PARLANTE
- * Proyecto: Sistema de Comunicación Local - CE 1110
+ * RECEPTOR 1 - Demodulador FSK con LCD
  * 
- * Hardware:
- * - Pin GPIO34: Entrada digital FSK (onda cuadrada 0/1)
- * - Pin GPIO26 (DAC2): Salida a parlante/amplificador
-
 */
-/*
- * RECEPTOR 1 - SIN delay()
- * Usa millis() para timing no bloqueante
- */
+
 
 #include "arduinoFFT.h"
-
+#include <LiquidCrystal.h>
 // ==================== CONFIGURACIÓN ====================
 #define SAMPLES 512
 #define SAMPLING_FREQUENCY 4000
 #define FSK_INPUT_PIN 34
-//#define AUDIO_OUTPUT_PIN 26
 
-#define F1 800
+//Frecuencias Portadoras
+#define F1 800 
 #define F2 1600
 
-#define UMBRAL_MINIMO 20.0    //50 NO, 40 NO, MUY ESTRICTO, 30 SI, 25 MEGA BIEN, 20 FUNCIONA PARA PROYECTO
-#define DIFERENCIA_MINIMA 15.0    //20 FUNCIONA, 15 MEJOR CASO
+#define UMBRAL_MINIMO 15.0    //30 SI, 25 MEGA BIEN, 20 FUNCIONA PARA PROYECTO, 15 MAS ESTABLE
+#define DIFERENCIA_MINIMA 10.0    //20 FUNCIONA, 15 MEJOR CASO, 10 SEGUNDO MEJOR CASO
 
 // ==================== VARIABLES GLOBALES ====================
 double vReal[SAMPLES];
@@ -37,14 +29,10 @@ unsigned long contadorAnalisis = 0;
 uint8_t bitsRecibidos[8];
 int bitCount = 0;
 
-// Variables para reproducción de audio sin delay
-//bool reproduciendo = false;
-//int muestraActual = 0;
-//int totalMuestras = 0;
-//int frecuenciaAudio = 0;
-//unsigned long tiempoAnteriorAudio = 0;
-//const int FS_AUDIO = 8000;
-//const int PERIODO_AUDIO_US = 1000000 / FS_AUDIO;  // 125 μs
+// RS, E, D4, D5, D6, D7 (Salidas al LCD)
+LiquidCrystal lcd(18, 19, 14, 15, 16, 17);
+
+
 
 // ==================== SETUP ====================
 void setup() {
@@ -54,6 +42,12 @@ void setup() {
     pinMode(FSK_INPUT_PIN, INPUT);
     
     samplingPeriod = round(1000000.0 / SAMPLING_FREQUENCY);
+
+    // Inicializar LCD
+    lcd.begin(16, 2);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Esperando...");
     
     Serial.println("\n╔════════════════════════════════════════════════╗");
     Serial.println("║  RECEPTOR 1 - SIN delay()                     ║");
@@ -65,11 +59,6 @@ void setup() {
 // ==================== LOOP ====================
 void loop() {
     static int sinSenalCount = 0;
-    // Si está reproduciendo audio, continuar
-    /*if (reproduciendo) {
-        actualizarAudio();
-        //return;  // **No capturar mientras reproduce      ***PARA ARREGLAR, PRUEBAS SIN EL RETURN
-    }*/
     
     // Capturar y procesar
     capturarDesdeGPIO();
@@ -87,12 +76,13 @@ void loop() {
                 bitCount = 0;
             }
         } else {
-            // Hay bit válido → reseteo contador de silencio y acumulo
+            // Si hay bit válido reseteo contador de silencio y acumulo
             sinSenalCount = 0;
             acumularBit(bit);
         }
         
         contadorAnalisis++;
+
 }
 
 // ==================== FUNCIONES ====================
@@ -104,12 +94,11 @@ void loop() {
 
         int level = digitalRead(FSK_INPUT_PIN);  // 0 ó 1 desde el cable
 
-        // Opción 1: usar 0 y 1 pero centrado:  -0.5 / +0.5
         vReal[i] = (double)level - 0.5;      // 0 -> -0.5, 1 -> +0.5
         vImag[i] = 0;
 
         while (micros() - microseconds < samplingPeriod) {
-            // espera activa
+            // espera activa SIN DELAY()
         }
     }
 }
@@ -129,7 +118,6 @@ int analizarYDemodular() {
     
     double maxMag = max(mag_f1, mag_f2);
     double diferencia = abs(mag_f1 - mag_f2);
-    
     if (maxMag < UMBRAL_MINIMO || diferencia < DIFERENCIA_MINIMA) {
         return -1;
     }
@@ -151,7 +139,7 @@ void mostrarAnalisis(int bit) {
     Serial.print(" | Mag@1600: ");
     Serial.print(mag_f2, 0);
     Serial.print(" | Bit: ");
-    
+    //Si no encuentra bit de acuerdo a las magnitudes del espectro bit = -1
     if (bit == -1) {
         Serial.println("❌");
     } else {
@@ -171,16 +159,22 @@ void acumularBit(int bit) {
     if (bitCount >= 8) {
         char c = bitsToChar();
         
-        Serial.print("\n🔊 CARÁCTER: '");
+          // Filtrado de palabra de sincronización
+        if (c == 0x55 || c == 'U') {  // 0x55 = 85 decimal = 'U'
+            Serial.println(" [PREÁMBULO detectado - descartando]");
+            bitCount = 0;
+            return;  // NO imprime el carácter
+        }
+        //Imprimir caracter y mostrarlo en LCD
+        Serial.print("\n CARÁCTER: '");
         Serial.print(c);
         Serial.print("' (ASCII ");
         Serial.print((int)c);
         Serial.println(")\n");
-        
-        //iniciarReproduccion(c);
-        
+        logLCD(String(c));
         bitCount = 0;
     }
+    
 }
 
 char bitsToChar() {
@@ -191,29 +185,19 @@ char bitsToChar() {
     return (char)ascii;
 }
 
-/*void iniciarReproduccion(char c) {
-    frecuenciaAudio = 200 + ((int)c * 10);
-    totalMuestras = (300 * FS_AUDIO) / 1000;  // 300ms
-    muestraActual = 0;
-    reproduciendo = true;
-    tiempoAnteriorAudio = micros();
-}
+//Función para mostrar caracteres en el LCD
+void logLCD(const String &msg) {
+  
 
-void actualizarAudio() {
-    unsigned long tiempoActual = micros();
-    
-    if (tiempoActual - tiempoAnteriorAudio >= PERIODO_AUDIO_US) {
-        tiempoAnteriorAudio = tiempoActual;
-        
-        if (muestraActual < totalMuestras) {
-            float t = muestraActual / (float)FS_AUDIO;
-            int valor = 128 + 100 * sin(2 * PI * frecuenciaAudio * t);
-            dacWrite(AUDIO_OUTPUT_PIN, constrain(valor, 0, 255));
-            muestraActual++;
-        } else {
-            // Terminar reproducción
-            dacWrite(AUDIO_OUTPUT_PIN, 128);
-            reproduciendo = false;
-        }
-    }
-}*/
+  //Mostrar en el LCD
+  lcd.clear();
+  lcd.setCursor(0,0);
+
+  if(msg.length() <= 16){
+    lcd.print(msg);
+  } else{
+    lcd.print(msg.substring(0,16));
+    lcd.setCursor(0,1);
+    lcd.print(msg.substring(16,min(32,(int)msg.length())));
+  }
+}

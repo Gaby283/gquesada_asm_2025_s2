@@ -1,137 +1,212 @@
 /*
- * TRANSMISOR FSK DIGITAL - SIN delay()
- * Usa millis() para timing no bloqueante
+ * TRANSMISOR FSK-TDM
  */
 
 #include <Arduino.h>
 
 #define TX_PIN 25
-#define F1 800.0f
-#define F2 1600.0f
-#define Tb 0.140f          // 140 ms por bit
-#define T_GUARDA 0.30f     // 300 ms de silencio entre caracteres
 
-// ==================== VARIABLES GLOBALES ====================
-enum Estado { IDLE, TRANSMITIENDO, GUARDA };
+// -------- Frecuencias FSK --------
+// Canal BAJO (piloto en FSK)
+static const float F_LOW0 = 360.0f;   // bit 0
+static const float F_LOW1 = 540.0f;   // bit 1
 
-Estado estadoActual = IDLE;
+// Canal ALTO (texto en FSK)
+static const float F_HIGH0 = 800.0f;  // bit 0
+static const float F_HIGH1 = 1600.0f; // bit 1
 
-char caracterActual = 0;
-int bitIndex = 0;
-int cicloActual = 0;
-int numCiclosTotal = 0;
-bool estadoPin = LOW;
+// -------- Configuración del Piloto --------
+static const float PILOTO_FREQ = 540.0f;  // Frecuencia objetivo (300-800 Hz)
+static const int PILOTO_BITS = 8;         // Bits por slot de piloto
 
-unsigned long tiempoAnterior = 0;
-float periodoActual_us = 0;
+// -------- Tiempos --------
+static const float TB_ms = 140.0f;
+static const float GUARD_ms = 200.0f;
 
-unsigned long inicioGuarda_ms = 0;   // NUEVO: para el estado GUARDA
+// -------- Preámbulo --------
+static const uint8_t PREAMBULO = 0x55;
 
-// ==================== SETUP ====================
-void setup() {
-    Serial.begin(115200);
-    delay(1000);  // Solo este delay inicial está OK
-    
-    pinMode(TX_PIN, OUTPUT);
-    digitalWrite(TX_PIN, LOW);
-    
-    Serial.println("\n╔════════════════════════════════════════╗");
-    Serial.println("║  TRANSMISOR FSK - SIN delay()         ║");
-    Serial.println("║  CE 1110 - Proyecto Comunicación      ║");
-    Serial.println("╚════════════════════════════════════════╝\n");
-    
-    Serial.println("✅ Sistema listo (modo no bloqueante)");
-    Serial.println("📝 Escribe texto para transmitir:\n");
+// -------- Cola de texto --------
+#define QSZ 64
+char qText[QSZ];
+int qhT = 0, qtT = 0, qcT = 0;
+
+bool qPush(char *q, int &qh, int &qt, int &qc, char v) {
+  if (qc >= QSZ) return false;
+  q[qt] = v;
+  qt = (qt + 1) % QSZ;
+  qc++;
+  return true;
 }
 
-void loop() {
-    switch (estadoActual) {
-        case IDLE:
-            if (Serial.available()) {
-                caracterActual = Serial.read();
-                
-                if (caracterActual >= 32) {
-                    Serial.print("TX: '");
-                    Serial.print(caracterActual);
-                    Serial.print("' → ");
-                    
-                    bitIndex = 7;
-                    estadoActual = TRANSMITIENDO;
-                    iniciarTransmisionBit();
-                }
-            }
-            break;
-            
-        case TRANSMITIENDO:
-            actualizarTransmision();
-            break;
+bool qPop(char *q, int &qh, int &qt, int &qc, char &v) {
+  if (qc <= 0) return false;
+  v = q[qh];
+  qh = (qh + 1) % QSZ;
+  qc--;
+  return true;
+}
 
-        case GUARDA: {
-            // Mantener la línea en LOW un tiempo fijo
-            unsigned long ahora = millis();
-            if (ahora - inicioGuarda_ms >= (unsigned long)(T_GUARDA * 1000)) {
-                estadoActual = IDLE;
-            }
-            break;
-        }
+// ===== Generación de onda =====
+inline void setLine(bool s) { 
+  digitalWrite(TX_PIN, s ? HIGH : LOW); 
+}
+
+inline void stopLine() { 
+  digitalWrite(TX_PIN, LOW); 
+}
+
+void sendFSKBit(bool bit, float f0, float f1, float Tb_ms) {
+  const float f = bit ? f1 : f0;
+  const float T_us = 1000000.0f / f;
+  const float half_us = T_us / 2.0f;
+  const unsigned long total_us = (unsigned long)(Tb_ms * 1000.0f);
+
+  unsigned long t0 = micros();
+  bool state = true;
+  setLine(state);
+  unsigned long last = micros();
+  
+  while (micros() - t0 < total_us) {
+    unsigned long now = micros();
+    if (now - last >= (unsigned long)half_us) {
+      state = !state;
+      setLine(state);
+      last = now;
     }
+  }
+  stopLine();
 }
 
-// ==================== FUNCIONES ====================
+void guardSilence(float ms) {
+  stopLine();
+  unsigned long t0 = micros();
+  const unsigned long total_us = (unsigned long)(ms * 1000.0f);
+  while (micros() - t0 < total_us) { }
+}
 
-void iniciarTransmisionBit() {
-    // Obtener bit actual
-    int bit = (((int)caracterActual) >> bitIndex) & 1;
+// ===== SLOT BAJO: Piloto en FSK =====
+void slotLOW() {
+    // Calcular cuántos '1' necesitamos
+    float ratio = (PILOTO_FREQ - F_LOW0) / (F_LOW1 - F_LOW0);
+    ratio = constrain(ratio, 0.0, 1.0);
+    
+    int numUnos = (int)(ratio * PILOTO_BITS + 0.5);
+    
+    Serial.print("[PILOTO] ");
+    Serial.print(PILOTO_FREQ);
+    Serial.print(" Hz → Patrón alternado (");
+    Serial.print(numUnos);
+    Serial.print("/");
+    Serial.print(PILOTO_BITS);
+    Serial.print("): ");
+    
+    // Generar patrón alternado
+    int unos_restantes = numUnos;
+    int ceros_restantes = PILOTO_BITS - numUnos;
+    
+    for (int i = 0; i < PILOTO_BITS; i++) {
+        bool bit;
+        
+        // Alternancia de 1s y 0s para simular una onda cuadrada
+        if (i % 2 == 0) {
+            // Preferencia '0'
+            if (ceros_restantes > 0) {
+                bit = false;
+                ceros_restantes--;
+            } else {
+                bit = true;
+                unos_restantes--;
+            }
+        } else {
+            // Preferencia '1'
+            if (unos_restantes > 0) {
+                bit = true;
+                unos_restantes--;
+            } else {
+                bit = false;
+                ceros_restantes--;
+            }
+        }
+        
+        Serial.print(bit);
+        sendFSKBit(bit, F_LOW0, F_LOW1, TB_ms);
+    }
+    Serial.println();
+}
+
+
+// ===== SLOT ALTO: Texto en FSK =====
+void slotHIGH() {
+  char c;
+  if (!qPop(qText, qhT, qtT, qcT, c)) {
+    return;
+  }
+
+  Serial.print("[TEXTO] '");
+  Serial.print(c);
+  Serial.print("' bits: ");
+
+  // Preámbulo
+  for (int b = 7; b >= 0; b--) {
+    bool bit = ((PREAMBULO >> b) & 1);
+    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);
+  }
+
+  // Carácter
+  for (int b = 7; b >= 0; b--) {
+    bool bit = (((uint8_t)c >> b) & 1);
     Serial.print(bit);
-    
-    // Configurar frecuencia
-    float frecuencia = (bit == 0) ? F1 : F2;
-    periodoActual_us = 1000000.0 / frecuencia;
-    
-    // Calcular ciclos necesarios para Tb
-    numCiclosTotal = (int)(frecuencia * Tb);
-    cicloActual = 0;
-    
-    // Iniciar onda cuadrada
-    estadoPin = HIGH;
-    digitalWrite(TX_PIN, estadoPin);
-    tiempoAnterior = micros();
+    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);
+  }
+  Serial.println(" ✓");
 }
 
-void actualizarTransmision() {
-    unsigned long tiempoActual = micros();
-    
-    // Verificar si pasó medio periodo
-    if (tiempoActual - tiempoAnterior >= (periodoActual_us / 2)) {
-        tiempoAnterior = tiempoActual;
-        
-        // Alternar pin
-        estadoPin = !estadoPin;
-        digitalWrite(TX_PIN, estadoPin);
-        
-        // Si completó un ciclo completo (HIGH→LOW)
-        if (estadoPin == LOW) {
-            cicloActual++;
-            
-            // Verificar si completó todos los ciclos del bit
-            if (cicloActual >= numCiclosTotal) {
-                // Bit completado, pasar al siguiente
-                bitIndex--;
-                
-                if (bitIndex < 0) {
-                    // Carácter completo
-                    Serial.println(" ✓");
-                    digitalWrite(TX_PIN, LOW);
+// ===== SETUP =====
+void setup() {
+  Serial.begin(115200);
+  delay(400);
+  pinMode(TX_PIN, OUTPUT);
+  stopLine();
 
-                    // Entrar a estado de guarda (silencio controlado)
-                    inicioGuarda_ms = millis();
-                    estadoActual = GUARDA;
-                } else {
-                    // Siguiente bit
-                    iniciarTransmisionBit();
-                }
+  Serial.println("\n╔════════════════════════════════════════════════╗");
+  Serial.println("║        TRANSMISOR FSK-TDM                      ║");
+  Serial.println("╚════════════════════════════════════════════════╝");
+  Serial.println();
+  
+  Serial.print("SLOT BAJO  (Piloto FSK): ");
+  Serial.print(PILOTO_FREQ);
+  Serial.print(" Hz (usando ");
+  Serial.print(F_LOW0);
+  Serial.print("/");
+  Serial.print(F_LOW1);
+  Serial.println(" Hz)");
+  
+  Serial.print("SLOT ALTO  (Texto FSK):  ");
+  Serial.print(F_HIGH0);
+  Serial.print("/");
+  Serial.print(F_HIGH1);
+  Serial.println(" Hz");
+  
+  Serial.println();
+  Serial.println("Rango válido piloto: 360-540 Hz");
+  Serial.println("Ambos canales usan modulación FSK");
+  Serial.println("Escribe texto por Serial...");
+  Serial.println();
+}
 
-            }
-        }
+// ===== LOOP =====
+void loop() {
+  while (Serial.available()) {
+    char ch = (char)Serial.read();
+    if ((uint8_t)ch >= 32) {
+      qPush(qText, qhT, qtT, qcT, ch);
     }
+  }
+
+  slotLOW();
+  guardSilence(GUARD_ms);
+
+  slotHIGH();
+  guardSilence(GUARD_ms);
 }
