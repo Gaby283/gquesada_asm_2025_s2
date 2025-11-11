@@ -51,17 +51,31 @@ void loop() {
     // Actualizar frecuencia filtrada
     int bit = analizarYDemodular();
     
-    if (bit != -1) {
-        float freqDetectada = (bit == 1) ? F_LOW1 : F_LOW0;
-        
-        freqFiltrada = ALPHA * freqDetectada + (1.0 - ALPHA) * freqFiltrada;
-        
-        Serial.print("FSK: ");
-        Serial.print((int)freqDetectada);
-        Serial.print(" Hz → Filtrado: ");
-        Serial.print((int)freqFiltrada);
-        Serial.println(" Hz");
-    } else {
+	if (bit != -1) {
+    	float freqDetectada = (bit == 1) ? F_LOW1 : F_LOW0;
+    	freqFiltrada = ALPHA * freqDetectada + (1.0 - ALPHA) * freqFiltrada;
+
+    	// === Magnitudes espectrales (para el análisis del profe) ===
+    	int index_f0 = round(F_LOW0 * SAMPLES / SAMPLING_FREQUENCY);
+    	int index_f1 = round(F_LOW1 * SAMPLES / SAMPLING_FREQUENCY);
+    	double mag_f0 = (vReal[index_f0-1] + vReal[index_f0] + vReal[index_f0+1]) / 3.0;
+    	double mag_f1 = (vReal[index_f1-1] + vReal[index_f1] + vReal[index_f1+1]) / 3.0;
+
+    	Serial.print("Mag@");
+    	Serial.print(F_LOW0);
+    	Serial.print(": ");
+    	Serial.print(mag_f0, 1);
+    	Serial.print(" | Mag@");
+    	Serial.print(F_LOW1);
+    	Serial.print(": ");
+    	Serial.print(mag_f1, 1);
+    	Serial.print(" | FSK: ");
+    	Serial.print((int)freqDetectada);
+    	Serial.print(" Hz → Filtrado: ");
+    	Serial.print((int)freqFiltrada);
+    	Serial.println(" Hz");
+	}
+     else {
         // Decay suave cuando no hay señal
         freqFiltrada = 0.95 * freqFiltrada;
         
