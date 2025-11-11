@@ -22,7 +22,7 @@ static const int PILOTO_BITS = 8;         // Bits por slot de piloto
 
 // -------- Tiempos --------
 static const float TB_ms = 140.0f;
-static const float GUARD_ms = 300.0f;
+static const float GUARD_ms = 200.0f;
 
 // -------- Preámbulo --------
 static const uint8_t PREAMBULO = 0x55;

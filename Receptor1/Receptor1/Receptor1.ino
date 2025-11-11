@@ -40,11 +40,7 @@ int bitCount = 0;
 // RS, E, D4, D5, D6, D7 (Salidas al LCD)
 LiquidCrystal lcd(18, 19, 14, 15, 16, 17);
 
-// Variables para control de LCD
-unsigned long tiempoUltimoCaracter = 0;
-String cadenaRecibida = "";
-unsigned long tiempoMostrado = 0;
-bool lcdMostrandoCaracter = false;
+
 
 // ==================== SETUP ====================
 void setup() {
@@ -95,13 +91,6 @@ void loop() {
         
         contadorAnalisis++;
 
-     // Verificar si hay que limpiar el LCD
-    if (lcdMostrandoCaracter && (millis() - tiempoMostrado >= 15000)) {
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Esperando...");
-        lcdMostrandoCaracter = false;
-    }
 }
 
 // ==================== FUNCIONES ====================
@@ -214,31 +203,17 @@ char bitsToChar() {
 }
 
 void logLCD(const String &msg) {
-  // Verificar si ha pasado el tiempo de limpieza (200ms desde el último carácter)
-  if (millis() - tiempoUltimoCaracter >= 15000 && cadenaRecibida.length() > 0) {
-    // Limpiar la cadena
-    cadenaRecibida = "";
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Esperando...");
-  }
   
-  // Agregar el carácter a la cadena recibida
-  cadenaRecibida += msg;
-  
-  // Actualizar el tiempo del último carácter recibido
-  tiempoUltimoCaracter = millis();
-  
-  // Mostrar la cadena completa en el LCD
-  lcd.clear();
-  lcd.setCursor(0, 0);
 
-  if (cadenaRecibida.length() <= 16) {
-    lcd.print(cadenaRecibida);
-  } else {
-    // Partir en dos líneas si es más largo
-    lcd.print(cadenaRecibida.substring(0, 16));
-    lcd.setCursor(0, 1);
-    lcd.print(cadenaRecibida.substring(16, min(32, (int)cadenaRecibida.length())));
+  //Mostrar en el LCD
+  lcd.clear();
+  lcd.setCursor(0,0);
+
+  if(msg.length() <= 16){
+    lcd.print(msg);
+  } else{
+    lcd.print(msg.substring(0,16));
+    lcd.setCursor(0,1);
+    lcd.print(msg.substring(16,min(32,(int)msg.length())));
   }
 }
