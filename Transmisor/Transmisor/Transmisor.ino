@@ -6,6 +6,7 @@
 #include <Arduino.h>
 
 #define TX_PIN 25
+#define SYNC_PIN 27  // pin extra de sincro TX→RX (elige el que quieras)
 
 // -------- Frecuencias FSK --------
 // Canal BAJO (piloto en FSK)
@@ -137,37 +138,39 @@ void slotLOW() {
 }
 
 
-// ===== SLOT ALTO: Texto en FSK =====
 void slotHIGH() {
   char c;
   if (!qPop(qText, qhT, qtT, qcT, c)) {
     return;
   }
 
-  Serial.print("[TEXTO] '");
+  Serial.print("[HIGH] TEXTO: '");
   Serial.print(c);
   Serial.print("' bits: ");
 
-  // Preámbulo
+  // 🔔 Handshake: marcar INICIO de carácter
+  digitalWrite(SYNC_PIN, HIGH);
+
   for (int b = 7; b >= 0; b--) {
-    bool bit = ((PREAMBULO >> b) & 1);
-    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);
+    bool bit = ((uint8_t)c >> b) & 1;
+    Serial.print(bit);
+    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);  // sigue usando slots / mismo GPIO
   }
 
-  // Carácter
-  for (int b = 7; b >= 0; b--) {
-    bool bit = (((uint8_t)c >> b) & 1);
-    Serial.print(bit);
-    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);
-  }
+  // 🔚 Fin de carácter
+  digitalWrite(SYNC_PIN, LOW);
+
   Serial.println(" ✓");
 }
+
 
 // ===== SETUP =====
 void setup() {
   Serial.begin(115200);
-  delay(400);
+  //delay(400);
   pinMode(TX_PIN, OUTPUT);
+  pinMode(SYNC_PIN, OUTPUT);
+  digitalWrite(SYNC_PIN, LOW);
   stopLine();
 
   Serial.println("\n╔════════════════════════════════════════════════╗");
