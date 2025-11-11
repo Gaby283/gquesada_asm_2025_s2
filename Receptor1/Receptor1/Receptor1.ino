@@ -5,6 +5,11 @@
  * Hardware:
  * - Pin GPIO34: Entrada digital FSK (onda cuadrada 0/1)
  * - Pin GPIO26 (DAC2): Salida a parlante/amplificador
+
+*/
+/*
+ * RECEPTOR 1 - SIN delay()
+ * Usa millis() para timing no bloqueante
  */
 
 #include "arduinoFFT.h"
@@ -13,14 +18,13 @@
 #define SAMPLES 512
 #define SAMPLING_FREQUENCY 4000
 #define FSK_INPUT_PIN 34
+//#define AUDIO_OUTPUT_PIN 26
 
 #define F1 800
 #define F2 1600
 
-#define UMBRAL_MINIMO     15.0
-#define DIFERENCIA_MINIMA 15.0
-
-#define SYNC_PIN 27
+#define UMBRAL_MINIMO 15.0    //50 NO, 40 NO, MUY ESTRICTO, 30 SI, 25 MEGA BIEN, 20 FUNCIONA PARA PROYECTO
+#define DIFERENCIA_MINIMA 10.0    //20 FUNCIONA, 15 MEJOR CASO
 
 // ==================== VARIABLES GLOBALES ====================
 double vReal[SAMPLES];
@@ -33,25 +37,12 @@ unsigned long contadorAnalisis = 0;
 uint8_t bitsRecibidos[8];
 int bitCount = 0;
 
-int  lastSync    = LOW;
-bool leyendoChar = false;   // estamos recibiendo bits de este carácter
-bool syncArmed   = false;   // vimos SYNC↑, estamos esperando el 1er bit válido
-
-// ==================== PROTOTIPOS ====================
-void capturarDesdeGPIO();
-void aplicarFFT();
-void obtenerMagnitudes(double &mag_f1, double &mag_f2);
-int  analizarYDemodular();
-void mostrarAnalisis(int bit);
-void acumularBit(int bit);
-char bitsToChar();
-
 // ==================== SETUP ====================
 void setup() {
     Serial.begin(115200);
+    delay(1000);  // Solo inicial
     
     pinMode(FSK_INPUT_PIN, INPUT);
-    pinMode(SYNC_PIN, INPUT);
     
     samplingPeriod = round(1000000.0 / SAMPLING_FREQUENCY);
     
@@ -66,88 +57,40 @@ void setup() {
 void loop() {
     static int sinSenalCount = 0;
     
-    // 1) Capturar ventana de muestras del GPIO FSK
+    // Capturar y procesar
     capturarDesdeGPIO();
-    
-    // 2) FFT
     aplicarFFT();
     
-    // 3) Demodular bit (0, 1, o -1 si no confiable, modo “estricto”)
     int bit = analizarYDemodular();
-    
-    // 4) Leer estado actual del pin de handshake
-    int sync = digitalRead(SYNC_PIN);
-
-    // Flanco de subida SYNC: LOW -> HIGH
-    if (sync == HIGH && lastSync == LOW) {
-        // Vimos el comienzo de un carácter, pero NO empezamos a contar todavía.
-        syncArmed     = true;   // “listo para arrancar cuando haya 1er bit válido”
-        leyendoChar   = false;
-        bitCount      = 0;
-        sinSenalCount = 0;
-        Serial.println("📡 [SYNC_PIN ↑] SYNC detectado, esperando 1er bit válido...");
-    }
-
-    lastSync = sync;
-
-    // 5) Mostrar info de debug (usa magnitudes internas)
     mostrarAnalisis(bit);
-
-    // 5.5) Intento de rescate suave si estamos dentro del carácter o justo después del SYNC
-    if (bit == -1 && (leyendoChar || syncArmed)) {
-        double mag_f1, mag_f2;
-        obtenerMagnitudes(mag_f1, mag_f2);
-        double maxMag = max(mag_f1, mag_f2);
-
-        // Si hay energía más o menos decente, forzamos decisión
-        if (maxMag >= (UMBRAL_MINIMO * 0.7)) {   // 70% del umbral “normal”
-            bit = (mag_f2 > mag_f1) ? 1 : 0;
-            Serial.println("⚠️  Bit rescatado en modo suave");
-        }
-    }
-
     
-    // 6) Lógica de silencio / bits
-    if (bit == -1) {
-        // No pudimos rescatar o no aplica rescate
-        // Solo contamos silencio si NO estamos dentro de un carácter
-        // ni esperando el primer bit válido
-        if (!leyendoChar && !syncArmed) {
+        if (bit == -1) {
+            // No hay tono claro (ni 800 ni 1600)
             sinSenalCount++;
-            if (sinSenalCount >= 2) {
+            
+            // Si llevamos varias ventanas “vacías”, reseteamos el acumulador de bits
+            if (sinSenalCount >= 2) {   // 3*128ms ≈ 384ms de silencio
                 bitCount = 0;
             }
-        }
-    } else {
-        // bit = 0 o 1 (normal o rescatado)
-        sinSenalCount = 0;
-
-        // Si SYNC ya fue detectado y este es el PRIMER bit válido del carácter:
-        if (syncArmed) {
-            leyendoChar = true;
-            bitCount    = 0;   // este bit va a ser el bit 0 del buffer
-            syncArmed   = false;
-            Serial.println("▶️  1er bit válido del carácter, empezando acumulación");
-        }
-
-        // Solo acumulamos si estamos “dentro” del carácter
-        if (leyendoChar) {
+        } else {
+            // Hay bit válido → reseteo contador de silencio y acumulo
+            sinSenalCount = 0;
             acumularBit(bit);
         }
-    }
-    
-    contadorAnalisis++;
+        
+        contadorAnalisis++;
 }
 
 // ==================== FUNCIONES ====================
 
-void capturarDesdeGPIO() {
+ void capturarDesdeGPIO() {
     unsigned long microseconds;
     for (int i = 0; i < SAMPLES; i++) {
         microseconds = micros();
 
         int level = digitalRead(FSK_INPUT_PIN);  // 0 ó 1 desde el cable
 
+        // Opción 1: usar 0 y 1 pero centrado:  -0.5 / +0.5
         vReal[i] = (double)level - 0.5;      // 0 -> -0.5, 1 -> +0.5
         vImag[i] = 0;
 
@@ -163,19 +106,14 @@ void aplicarFFT() {
     FFT.complexToMagnitude();
 }
 
-void obtenerMagnitudes(double &mag_f1, double &mag_f2) {
+int analizarYDemodular() {
     int index_f1 = round(F1 * SAMPLES / SAMPLING_FREQUENCY);
     int index_f2 = round(F2 * SAMPLES / SAMPLING_FREQUENCY);
     
-    mag_f1 = (vReal[index_f1-1] + vReal[index_f1] + vReal[index_f1+1]) / 3.0;
-    mag_f2 = (vReal[index_f2-1] + vReal[index_f2] + vReal[index_f2+1]) / 3.0;
-}
-
-int analizarYDemodular() {
-    double mag_f1, mag_f2;
-    obtenerMagnitudes(mag_f1, mag_f2);
+    double mag_f1 = (vReal[index_f1-1] + vReal[index_f1] + vReal[index_f1+1]) / 3.0;
+    double mag_f2 = (vReal[index_f2-1] + vReal[index_f2] + vReal[index_f2+1]) / 3.0;
     
-    double maxMag     = max(mag_f1, mag_f2);
+    double maxMag = max(mag_f1, mag_f2);
     double diferencia = abs(mag_f1 - mag_f2);
     
     if (maxMag < UMBRAL_MINIMO || diferencia < DIFERENCIA_MINIMA) {
@@ -186,8 +124,11 @@ int analizarYDemodular() {
 }
 
 void mostrarAnalisis(int bit) {
-    double mag_f1, mag_f2;
-    obtenerMagnitudes(mag_f1, mag_f2);
+    int index_f1 = round(F1 * SAMPLES / SAMPLING_FREQUENCY);
+    int index_f2 = round(F2 * SAMPLES / SAMPLING_FREQUENCY);
+    
+    double mag_f1 = (vReal[index_f1-1] + vReal[index_f1] + vReal[index_f1+1]) / 3.0;
+    double mag_f2 = (vReal[index_f2-1] + vReal[index_f2] + vReal[index_f2+1]) / 3.0;
     
     Serial.print("Análisis #");
     Serial.print(contadorAnalisis);
@@ -198,37 +139,36 @@ void mostrarAnalisis(int bit) {
     Serial.print(" | Bit: ");
     
     if (bit == -1) {
-        Serial.print("❌");
+        Serial.println("❌");
     } else {
         Serial.print(bit);
+        Serial.print(" | Bits: [");
+        for (int i = 0; i < bitCount; i++) {
+            Serial.print(bitsRecibidos[i]);
+        }
+        Serial.println("]");
     }
-
-    Serial.print(" | leyendoChar=");
-    Serial.print(leyendoChar ? "1" : "0");
-    Serial.print(" | syncArmed=");
-    Serial.print(syncArmed ? "1" : "0");
-    Serial.print(" | Bits parciales: [");
-    for (int i = 0; i < bitCount; i++) {
-        Serial.print(bitsRecibidos[i]);
-    }
-    Serial.println("]");
 }
 
 void acumularBit(int bit) {
-    if (bitCount < 8) {
-        bitsRecibidos[bitCount] = bit;
-        bitCount++;
-    }
+    bitsRecibidos[bitCount] = bit;
+    bitCount++;
     
     if (bitCount >= 8) {
         char c = bitsToChar();
-
-        // PREÁMBULO opcional si lo usás
-        if (c == 0x55 || c == 'U') {
+        /*
+        Serial.print("\n🔊 CARÁCTER: '");
+        Serial.print(c);
+        Serial.print("' (ASCII ");
+        Serial.print((int)c);
+        Serial.println(")\n");
+        bitCount = 0;
+        */
+          // FILTRAR PREÁMBULO
+        if (c == 0x55 || c == 'U') {  // 0x55 = 85 decimal = 'U'
             Serial.println("📡 [PREÁMBULO detectado - descartando]");
-            bitCount    = 0;
-            leyendoChar = false;  // esperar próximo SYNC
-            return;
+            bitCount = 0;
+            return;  // ← NO imprime el carácter
         }
 
         Serial.print("\n🔊 CARÁCTER: '");
@@ -237,9 +177,9 @@ void acumularBit(int bit) {
         Serial.print((int)c);
         Serial.println(")\n");
         
-        bitCount    = 0;
-        leyendoChar = false;  // fin de este carácter, esperar nuevo SYNC↑
+        bitCount = 0;
     }
+    
 }
 
 char bitsToChar() {

@@ -6,7 +6,6 @@
 #include <Arduino.h>
 
 #define TX_PIN 25
-#define SYNC_PIN 27  // pin extra de sincro TX→RX (elige el que quieras)
 
 // -------- Frecuencias FSK --------
 // Canal BAJO (piloto en FSK)
@@ -18,12 +17,12 @@ static const float F_HIGH0 = 800.0f;  // bit 0
 static const float F_HIGH1 = 1600.0f; // bit 1
 
 // -------- Configuración del Piloto --------
-static const float PILOTO_FREQ = 450.0f;  // ← Frecuencia objetivo (300-800 Hz)
+static const float PILOTO_FREQ = 540.0f;  // ← Frecuencia objetivo (300-800 Hz)
 static const int PILOTO_BITS = 8;         // Bits por slot de piloto
 
 // -------- Tiempos --------
 static const float TB_ms = 140.0f;
-static const float GUARD_ms = 200.0f;
+static const float GUARD_ms = 300.0f;
 
 // -------- Preámbulo --------
 static const uint8_t PREAMBULO = 0x55;
@@ -95,14 +94,14 @@ void slotLOW() {
     
     int numUnos = (int)(ratio * PILOTO_BITS + 0.5);
     
-    /*Serial.print("[PILOTO] ");
+    Serial.print("[PILOTO] ");
     Serial.print(PILOTO_FREQ);
     Serial.print(" Hz → Patrón alternado (");
     Serial.print(numUnos);
     Serial.print("/");
     Serial.print(PILOTO_BITS);
     Serial.print("): ");
-    */
+    
     // NUEVO: Generar patrón ALTERNADO
     int unos_restantes = numUnos;
     int ceros_restantes = PILOTO_BITS - numUnos;
@@ -131,46 +130,44 @@ void slotLOW() {
             }
         }
         
-        //Serial.print(bit);
+        Serial.print(bit);
         sendFSKBit(bit, F_LOW0, F_LOW1, TB_ms);
     }
-    //Serial.println();
+    Serial.println();
 }
 
 
+// ===== SLOT ALTO: Texto en FSK =====
 void slotHIGH() {
   char c;
   if (!qPop(qText, qhT, qtT, qcT, c)) {
     return;
   }
 
-  Serial.print("[HIGH] TEXTO: '");
+  Serial.print("[TEXTO] '");
   Serial.print(c);
   Serial.print("' bits: ");
 
-  // 🔔 Handshake: marcar INICIO de carácter
-  digitalWrite(SYNC_PIN, HIGH);
-
+  // Preámbulo
   for (int b = 7; b >= 0; b--) {
-    bool bit = ((uint8_t)c >> b) & 1;
-    Serial.print(bit);
-    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);  // sigue usando slots / mismo GPIO
+    bool bit = ((PREAMBULO >> b) & 1);
+    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);
   }
 
-  // 🔚 Fin de carácter
-  digitalWrite(SYNC_PIN, LOW);
-
+  // Carácter
+  for (int b = 7; b >= 0; b--) {
+    bool bit = (((uint8_t)c >> b) & 1);
+    Serial.print(bit);
+    sendFSKBit(bit, F_HIGH0, F_HIGH1, TB_ms);
+  }
   Serial.println(" ✓");
 }
-
 
 // ===== SETUP =====
 void setup() {
   Serial.begin(115200);
-  //delay(400);
+  delay(400);
   pinMode(TX_PIN, OUTPUT);
-  pinMode(SYNC_PIN, OUTPUT);
-  digitalWrite(SYNC_PIN, LOW);
   stopLine();
 
   Serial.println("\n╔════════════════════════════════════════════════╗");
