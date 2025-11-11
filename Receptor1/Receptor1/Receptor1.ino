@@ -13,7 +13,7 @@
  */
 
 #include "arduinoFFT.h"
-
+#include <LiquidCrystal.h>
 // ==================== CONFIGURACIÓN ====================
 #define SAMPLES 512
 #define SAMPLING_FREQUENCY 4000
@@ -37,6 +37,15 @@ unsigned long contadorAnalisis = 0;
 uint8_t bitsRecibidos[8];
 int bitCount = 0;
 
+// RS, E, D4, D5, D6, D7 (Salidas al LCD)
+LiquidCrystal lcd(18, 19, 14, 15, 16, 17);
+
+// Variables para control de LCD
+unsigned long tiempoUltimoCaracter = 0;
+String cadenaRecibida = "";
+unsigned long tiempoMostrado = 0;
+bool lcdMostrandoCaracter = false;
+
 // ==================== SETUP ====================
 void setup() {
     Serial.begin(115200);
@@ -45,6 +54,12 @@ void setup() {
     pinMode(FSK_INPUT_PIN, INPUT);
     
     samplingPeriod = round(1000000.0 / SAMPLING_FREQUENCY);
+
+    // Inicializar LCD
+    lcd.begin(16, 2);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Esperando...");
     
     Serial.println("\n╔════════════════════════════════════════════════╗");
     Serial.println("║  RECEPTOR 1 - SIN delay()                     ║");
@@ -79,6 +94,14 @@ void loop() {
         }
         
         contadorAnalisis++;
+
+     // Verificar si hay que limpiar el LCD
+    if (lcdMostrandoCaracter && (millis() - tiempoMostrado >= 15000)) {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Esperando...");
+        lcdMostrandoCaracter = false;
+    }
 }
 
 // ==================== FUNCIONES ====================
@@ -176,7 +199,7 @@ void acumularBit(int bit) {
         Serial.print("' (ASCII ");
         Serial.print((int)c);
         Serial.println(")\n");
-        
+        logLCD(String(c));
         bitCount = 0;
     }
     
@@ -188,4 +211,34 @@ char bitsToChar() {
         ascii = (ascii << 1) | bitsRecibidos[i];
     }
     return (char)ascii;
+}
+
+void logLCD(const String &msg) {
+  // Verificar si ha pasado el tiempo de limpieza (200ms desde el último carácter)
+  if (millis() - tiempoUltimoCaracter >= 15000 && cadenaRecibida.length() > 0) {
+    // Limpiar la cadena
+    cadenaRecibida = "";
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Esperando...");
+  }
+  
+  // Agregar el carácter a la cadena recibida
+  cadenaRecibida += msg;
+  
+  // Actualizar el tiempo del último carácter recibido
+  tiempoUltimoCaracter = millis();
+  
+  // Mostrar la cadena completa en el LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+
+  if (cadenaRecibida.length() <= 16) {
+    lcd.print(cadenaRecibida);
+  } else {
+    // Partir en dos líneas si es más largo
+    lcd.print(cadenaRecibida.substring(0, 16));
+    lcd.setCursor(0, 1);
+    lcd.print(cadenaRecibida.substring(16, min(32, (int)cadenaRecibida.length())));
+  }
 }
