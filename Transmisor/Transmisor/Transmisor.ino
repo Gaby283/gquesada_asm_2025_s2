@@ -1,6 +1,5 @@
 /*
- * TRANSMISOR FSK-TDM (VERSIÓN FINAL CORRECTA)
- * Ambos canales usan FSK
+ * TRANSMISOR FSK-TDM
  */
 
 #include <Arduino.h>
@@ -17,7 +16,7 @@ static const float F_HIGH0 = 800.0f;  // bit 0
 static const float F_HIGH1 = 1600.0f; // bit 1
 
 // -------- Configuración del Piloto --------
-static const float PILOTO_FREQ = 540.0f;  // ← Frecuencia objetivo (300-800 Hz)
+static const float PILOTO_FREQ = 540.0f;  // Frecuencia objetivo (300-800 Hz)
 static const int PILOTO_BITS = 8;         // Bits por slot de piloto
 
 // -------- Tiempos --------
@@ -102,16 +101,16 @@ void slotLOW() {
     Serial.print(PILOTO_BITS);
     Serial.print("): ");
     
-    // NUEVO: Generar patrón ALTERNADO
+    // Generar patrón alternado
     int unos_restantes = numUnos;
     int ceros_restantes = PILOTO_BITS - numUnos;
     
     for (int i = 0; i < PILOTO_BITS; i++) {
         bool bit;
         
-        // Estrategia: Alternar lo más posible
+        // Alternancia de 1s y 0s para simular una onda cuadrada
         if (i % 2 == 0) {
-            // Posición par: preferir '0'
+            // Preferencia '0'
             if (ceros_restantes > 0) {
                 bit = false;
                 ceros_restantes--;
@@ -120,7 +119,7 @@ void slotLOW() {
                 unos_restantes--;
             }
         } else {
-            // Posición impar: preferir '1'
+            // Preferencia '1'
             if (unos_restantes > 0) {
                 bit = true;
                 unos_restantes--;
@@ -175,7 +174,7 @@ void setup() {
   Serial.println("╚════════════════════════════════════════════════╝");
   Serial.println();
   
-  Serial.print("📡 SLOT BAJO  (Piloto FSK): ");
+  Serial.print("SLOT BAJO  (Piloto FSK): ");
   Serial.print(PILOTO_FREQ);
   Serial.print(" Hz (usando ");
   Serial.print(F_LOW0);
@@ -183,16 +182,16 @@ void setup() {
   Serial.print(F_LOW1);
   Serial.println(" Hz)");
   
-  Serial.print("📝 SLOT ALTO  (Texto FSK):  ");
+  Serial.print("SLOT ALTO  (Texto FSK):  ");
   Serial.print(F_HIGH0);
   Serial.print("/");
   Serial.print(F_HIGH1);
   Serial.println(" Hz");
   
   Serial.println();
-  Serial.println("✅ Rango válido piloto: 360-540 Hz");
-  Serial.println("✅ Ambos canales usan modulación FSK");
-  Serial.println("✅ Escribe texto por Serial...");
+  Serial.println("Rango válido piloto: 360-540 Hz");
+  Serial.println("Ambos canales usan modulación FSK");
+  Serial.println("Escribe texto por Serial...");
   Serial.println();
 }
 

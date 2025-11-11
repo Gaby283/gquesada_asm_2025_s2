@@ -1,5 +1,5 @@
 /*
- * RECEPTOR 2 - Con audio continuo (solución mejorada)
+ * RECEPTOR 2 - Demodulación FSK con Parlante
  */
 
 #include "arduinoFFT.h"
@@ -42,7 +42,7 @@ void setup() {
 }
 
 void loop() {
-    // Capturar MIENTRAS se reproduce audio
+    // Capturar mientras se reproduce audio
     capturarConAudio();
     
     // Procesar FFT
@@ -53,9 +53,10 @@ void loop() {
     
     if (bit != -1) {
         float freqDetectada = (bit == 1) ? F_LOW1 : F_LOW0;
+        
         freqFiltrada = ALPHA * freqDetectada + (1.0 - ALPHA) * freqFiltrada;
         
-        Serial.print("🎵 FSK: ");
+        Serial.print("FSK: ");
         Serial.print((int)freqDetectada);
         Serial.print(" Hz → Filtrado: ");
         Serial.print((int)freqFiltrada);
@@ -70,7 +71,7 @@ void loop() {
     }
 }
 
-// NUEVA FUNCIÓN: Captura Y reproduce simultáneamente
+// Captura y reproduce simultáneamente
 void capturarConAudio() {
     unsigned long lastAudioSample = micros();
     
@@ -82,12 +83,11 @@ void capturarConAudio() {
         vReal[i] = (double)level - 0.5;
         vImag[i] = 0;
         
-        // MIENTRAS esperamos el siguiente sample de FFT,
-        // generar VARIAS muestras de audio
+        // Mientras se espera el siguiente sample de FFT,
+        // generar varias muestras de audio
         while (micros() - microseconds < samplingPeriod) {
             unsigned long now = micros();
             
-            // Generar audio cada 125 μs (8 kHz)
             if (now - lastAudioSample >= 125) {
                 lastAudioSample = now;
                 
